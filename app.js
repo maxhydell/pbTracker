@@ -22,19 +22,40 @@ async function loadSets() {
   const data = await callAPI({ action: "getTodaySets" });
 
   const container = document.getElementById("setsContainer");
-  container.innerHTML = "";
+  container.innerHTML = "<h2>Pool Play Matches</h2>";
 
-  data.forEach((set, i) => {
+  data.forEach(match => {
     const div = document.createElement("div");
-    div.className = "card";
+    div.className = "match-card";
+
+    const hasScore = match.score && match.score !== "";
+
+    let scoreHTML = "";
+
+    if (hasScore) {
+      const [a, b] = match.score.split("-").map(Number);
+
+      const isWin = match.teamA.includes("Max"); // TEMP "(I)" logic
+
+      scoreHTML = `
+        <div class="score">${match.score}</div>
+        <div class="${isWin ? "win" : "loss"}">${isWin ? "WIN" : "LOSS"}</div>
+      `;
+    } else {
+      scoreHTML = `
+        <button class="enter-score" onclick="quickScore(${match.set},1)">
+          Enter Score
+        </button>
+      `;
+    }
 
     div.innerHTML = `
-      <h3>Set ${set.set}</h3>
-      <p>${set.teamA} vs ${set.teamB}</p>
-      <div class="grid">
-        <button onclick="quickScore(${set.set},1)">Game 1</button>
-        <button onclick="quickScore(${set.set},2)">Game 2</button>
-        <button onclick="quickScore(${set.set},3)">Game 3</button>
+      <div class="match-left">
+        <div class="teamA">${match.teamA}</div>
+        <div class="teamB">${match.teamB}</div>
+      </div>
+      <div class="match-right">
+        ${scoreHTML}
       </div>
     `;
 
@@ -139,6 +160,10 @@ function swipe(direction) {
   showPage(pages[currentPage]);
 }
 
+
+
+
 function toggleMenu() {
   document.getElementById("sideMenu").classList.toggle("open");
+  document.getElementById("overlay").classList.toggle("show");
 }
