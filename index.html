@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pickleball Tracker</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+<div id="loading">Pickleball Tracker</div>
+
+<div class="app">
+
+  <h1>Pickleball Tracker</h1>
+
+  <div class="card">
+    <h2>Enter Score</h2>
+    <input id="set" placeholder="Set #" />
+    <input id="game" placeholder="Game #" />
+    <input id="score" placeholder="11-7" />
+    <button onclick="submitScore()">Submit Score</button>
+  </div>
+
+  <div class="card">
+    <button onclick="generateGames()">Generate Games</button>
+    <button onclick="completeDay()">Finish Day</button>
+  </div>
+
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
