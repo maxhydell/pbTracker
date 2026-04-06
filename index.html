@@ -16,7 +16,7 @@
   <div class="loading-text">
     <span class="word1">PICKLEBALL</span>
     <span class="word2">TRACKER</span>
-    <img class="ball" src="https://upload.wikimedia.org/wikipedia/commons/7/7a/Pickleball_ball.png">
+    <img class="ball" src="pickleball.png">
   </div>
 </div>
 
@@ -37,18 +37,15 @@
 
   <!-- PAGES -->
 
-  <div id="home" class="page active">
+  <div id="input" class="page active">
     <h1>Today's Matches</h1>
+
     <div id="setsContainer"></div>
-  </div>
-    <h1>Dashboard</h1>
 
     <div class="card">
       <button onclick="generateGames()">Generate Games</button>
       <button onclick="completeDay()">Finish Day</button>
     </div>
-
-    <div class="card" id="liveStatus"></div>
   </div>
 
   <div id="rankings" class="page">
@@ -66,7 +63,7 @@
     <div id="setsList"></div>
   </div>
 
-  <div id="input" class="page">
+  <div id="input" class="page active">
     <h1>Enter Score</h1>
 
     <div class="card">
@@ -81,10 +78,10 @@
   <!-- TAB BAR -->
   <div class="tab-bar">
     <button onclick="showPage('home')">Home</button>
-    <button onclick="showPage('rankings')">Rankings</button>
-    <button onclick="showPage('schedule')">Schedule</button>
-    <button onclick="showPage('sets')">Sets</button>
-    <button onclick="showPage('input')">Input</button>
+    <button onclick="navigate('input')">Dashboard</button>
+    <button onclick="navigate('rankings')">Rankings</button>
+    <button onclick="navigate('schedule')">Schedule</button>
+    <button onclick="navigate('sets')">Sets</button>
   </div>
 
 </div>

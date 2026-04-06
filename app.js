@@ -167,3 +167,7 @@ function toggleMenu() {
   document.getElementById("sideMenu").classList.toggle("open");
   document.getElementById("overlay").classList.toggle("show");
 }
+
+window.onload = () => {
+  loadSets();
+};
