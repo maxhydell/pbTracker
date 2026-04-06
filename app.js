@@ -1,5 +1,8 @@
 const API_URL = "https://script.google.com/macros/s/AKfycbxNEkhPV65x6JJt6QFHIJQysuTYN8egIia-lhvGT2ZyRoRosF6V-ZMesqkH9jepv6kd/exec";
 
+function log(label, data) {
+  console.log("🔥", label, data);
+}
 
 let startY = 0;
 
@@ -45,6 +48,7 @@ async function callAPI(data) {
 
 async function loadSets() {
   const data = await callAPI({ action: "getTodaySets" });
+  log("SETS DATA", data);
 
   const container = document.getElementById("setsContainer");
 
@@ -252,19 +256,27 @@ let chart;
 
 async function loadRankings() {
   const data = await callAPI({ action: "getUserTrend" });
+  log("RANKINGS DATA", data);
 
-  const ctx = document.getElementById("chart");
+  if (!data || data.length === 0) return;
+
+  const latest = data[data.length - 1];
+
+  document.getElementById("bigStat").innerText = latest.winPct.toFixed(2);
+  document.getElementById("topPercent").innerText = "Top 6%";
 
   if (chart) chart.destroy();
 
-  chart = new Chart(ctx, {
+  chart = new Chart(document.getElementById("chart"), {
     type: "line",
     data: {
       labels: data.map((_, i) => i),
       datasets: [{
         data: data.map(p => p.winPct),
+        borderColor: "#00c853",
         borderWidth: 3,
-        tension: 0.4
+        tension: 0.4,
+        pointRadius: 3
       }]
     },
     options: {
@@ -301,6 +313,8 @@ function toggleMenu() {
 
 function navigate(page) {
   showPage(page);
+  document.getElementById("sideMenu").classList.remove("open");
+  document.getElementById("overlay").classList.remove("show");
   toggleMenu(); // closes it
 }
 

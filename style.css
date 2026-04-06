@@ -89,6 +89,28 @@ body {
   font-weight: 600;
 }
 
+
+.rank-card {
+  background: rgba(20,20,20,0.9);
+  padding: 20px;
+  border-radius: 20px;
+}
+
+.rank-header {
+  display: flex;
+  justify-content: space-between;
+}
+
+.rank-score {
+  text-align: right;
+}
+
+#bigStat {
+  font-size: 40px;
+  font-weight: 700;
+  color: #00c853;
+}
+
 /* PAGES */
 .page {
   position: absolute;
