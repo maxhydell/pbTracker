@@ -22,17 +22,6 @@ function haptic() {
 function showPage(id) {
   document.querySelectorAll(".page").forEach(p => {
     p.classList.remove("active");
-    p.style.display = "none"; // 🔥 FIX stacking
-  });
-
-  const page = document.getElementById(id);
-  page.style.display = "block";
-  page.classList.add("active");
-}
-
-function showPage(id) {
-  document.querySelectorAll(".page").forEach(p => {
-    p.classList.remove("active");
     p.style.display = "none";
   });
 
@@ -40,10 +29,8 @@ function showPage(id) {
   page.style.display = "block";
   page.classList.add("active");
 
-  // 🔥 ADD THIS PART
-  if (id === "rankings") {
-    loadRankings();
-  }
+  if (id === "rankings") loadRankings();
+  if (id === "schedule") loadSchedule();
 }
 
 
@@ -60,43 +47,69 @@ async function loadSets() {
   const data = await callAPI({ action: "getTodaySets" });
 
   const container = document.getElementById("setsContainer");
-  container.innerHTML = "<h2>Pool Play Matches</h2>";
+
+  container.innerHTML = `
+    <h2 class="section-title">Pool Play Matches</h2>
+  `;
 
   data.forEach(match => {
-    const div = document.createElement("div");
-    div.className = "match-card";
-
     const score = match.score || "";
-    const isComplete = score.includes("-");
+    const complete = score.includes("-");
 
-    let scoreUI = "";
+    let scoreHTML = "";
 
-    if (!isComplete) {
-      scoreUI = `
-        <div class="score-input">
-          <input type="number" placeholder="0" onchange="saveScore(${match.set}, this, 'A')">
+    if (!complete) {
+      scoreHTML = `
+        <div class="score-box">
+          <input type="number" placeholder="0" oninput="handleScoreInput(${match.set}, this)">
           <span>-</span>
-          <input type="number" placeholder="0" onchange="saveScore(${match.set}, this, 'B')">
+          <input type="number" placeholder="0" oninput="handleScoreInput(${match.set}, this)">
         </div>
       `;
     } else {
-      scoreUI = `<div class="score" onclick="editScore(${match.set}, '${score}')">${score}</div>`;
+      scoreHTML = `
+        <div class="score-display" onclick="editScore(${match.set}, '${score}')">
+          ${score}
+        </div>
+      `;
     }
 
-    div.innerHTML = `
-      <div class="match-left">
-        <div class="teamA">${match.teamA}</div>
-        <div class="teamB">${match.teamB}</div>
-      </div>
-      <div class="match-right">
-        ${scoreUI}
-        <div id="status-${match.set}"></div>
+    container.innerHTML += `
+      <div class="match-row">
+        <div class="teams">
+          <div class="teamA">${match.teamA}</div>
+          <div class="teamB">${match.teamB}</div>
+        </div>
+
+        <div class="score-area">
+          ${scoreHTML}
+          <div id="status-${match.set}"></div>
+        </div>
       </div>
     `;
-
-    container.appendChild(div);
   });
 }
+
+
+function handleScoreInput(set, input) {
+  const parent = input.parentElement;
+  const inputs = parent.querySelectorAll("input");
+
+  if (inputs[0].value && inputs[1].value) {
+    const score = `${inputs[0].value}-${inputs[1].value}`;
+
+    callAPI({
+      action: "score",
+      set,
+      game: 1,
+      score
+    });
+
+    showSuccess(`status-${set}`);
+    loadSets();
+  }
+}
+
 
 async function quickScore(set, game) {
   const score = prompt("Enter score");

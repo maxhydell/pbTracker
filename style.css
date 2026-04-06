@@ -5,7 +5,62 @@ body {
   color: white;
 }
 
-<div id="overlay" class="overlay" onclick="toggleMenu()"></div>
+
+
+.section-title {
+  font-size: 22px;
+  font-weight: 700;
+  margin-bottom: 10px;
+}
+
+.match-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: rgba(20,20,20,0.9);
+  border-radius: 16px;
+  padding: 16px;
+  margin-bottom: 10px;
+}
+
+.teams {
+  font-size: 15px;
+}
+
+.teamA {
+  font-weight: 600;
+}
+
+.teamB {
+  opacity: 0.6;
+}
+
+.score-area {
+  text-align: right;
+}
+
+.score-display {
+  font-size: 22px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.score-box {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.score-box input {
+  width: 40px;
+  padding: 6px;
+  border-radius: 8px;
+  border: none;
+  text-align: center;
+  background: #111;
+  color: white;
+}
+
 
 .app {
   max-width: 430px;
