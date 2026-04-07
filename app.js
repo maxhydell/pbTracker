@@ -1,4 +1,4 @@
-const API_URL = "https://script.google.com/macros/s/AKfycbxlx0ViAZe-oW8f9tRxSTHWAcBb3Xb2G66YXdPbsF0sglQ_v4DWivGzBVL57zhN9aS9/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbwFNYYCdmEoQ5IwtDBD7gAY-xgwa61Tek72pMmk6HeNUFAPDhV45tloni6Sl8ErOdMt/exec";
 
 function log(label, data) {
   console.log("🔥", label, data);
@@ -304,6 +304,13 @@ function navigate(page) {
   showPage(page);
 }
 
-window.onload = () => {
-  loadSets();
+window.onload = async () => {
+  await loadSets();
+
+  // ✅ HIDE LOADING SCREEN
+  const loading = document.getElementById("loading-screen");
+  if (loading) {
+    loading.style.opacity = "0";
+    setTimeout(() => loading.style.display = "none", 500);
+  }
 };
