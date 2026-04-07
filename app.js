@@ -84,17 +84,21 @@ async function loadSets() {
       const score = match.scores?.[i] || "";
 
 
-      let rightSide = "";
+      
 
-      const [a, b] = score && score.includes("-")
-      ? score.split("-")
-      : [0, 0];
+      let a = 0, b = 0;
+
+      if (score && score.includes("-")) {
+        const parts = score.split("-");
+        a = parts[0];
+        b = parts[1];
+      }
 
       let result = "tie";
-      if (a > b) result = "win";
-      if (b > a) result = "loss";
+      if (Number(a) > Number(b)) result = "win";
+      if (Number(b) > Number(a)) result = "loss";
 
-      rightSide = `
+      const rightSide = `
         <div class="score-editable">
           <input type="number" value="${a}" oninput="updateScore(${match.set}, ${i}, this)">
           <span>-</span>
