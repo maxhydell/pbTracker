@@ -53,8 +53,9 @@ function showPage(id) {
 
 function formatNames(str) {
   return str
-    .toUpperCase()
-    .replace(/\//g, " / ");
+    .split("/")
+    .map(n => n.trim().charAt(0).toUpperCase() + n.trim().slice(1).toLowerCase())
+    .join(" & ");
 }
 
 async function callAPI(params) {
@@ -97,7 +98,7 @@ async function loadSets() {
     // Creating the container for the specific Set
     const setWrapper = document.createElement("div");
     setWrapper.className = "set-container";
-    setWrapper.innerHTML = `<div class="set-title">SET ${match.set}</div>`;
+    setWrapper.innerHTML = `<div class="set-title">Round ${match.set}</div>`;
 
     const games = ["G1", "G2", "G3"];
 
@@ -130,11 +131,17 @@ async function loadSets() {
 
           <div class="right-content">
             <div class="score-editable">
-              <input type="number" value="${a}" oninput="updateScore(${match.set}, ${i}, this)">
+              <input type="number" inputmode="numeric"
+                value="${a}" 
+                oninput="updateScore(${match.set}, ${i}, this)" 
+                onblur="this.blur()">
               <span class="score-separator">-</span>
-              <input type="number" value="${b}" oninput="updateScore(${match.set}, ${i}, this)">
+              <input type="number" inputmode="numeric"
+                value="${b}" 
+                oninput="updateScore(${match.set}, ${i}, this)" 
+                onblur="this.blur()">
             </div>
-            <div class="meta-info">${g} • Group 2</div>
+            <div class="meta-info">G${i+1} • Set ${match.set}</div>
             <div id="status-${match.set}-${i}"></div>
           </div>
         </div>
