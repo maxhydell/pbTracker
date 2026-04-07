@@ -32,8 +32,12 @@ function showPage(id) {
   page.style.display = "block";
   page.classList.add("active");
 
+  document.getElementById("sideMenu").classList.remove("open");
+  document.getElementById("overlay").classList.remove("show");
+
   if (id === "rankings") loadRankings();
   if (id === "schedule") loadSchedule();
+  if (id === "input") loadSets();
 }
 
 
@@ -50,48 +54,58 @@ async function loadSets() {
 
   const container = document.getElementById("setsContainer");
 
-  container.innerHTML = `
-    <h2 class="section-title">Pool Play Matches</h2>
-  `;
+  container.innerHTML = `<h2 class="section-title">Pool Play Matches</h2>`;
 
   data.forEach(match => {
-    const score = match.score || "";
-    const complete = score.includes("-");
+    const games = ["G1", "G2", "G3"];
 
-    let scoreHTML = "";
+    container.innerHTML += `<div class="set-block">`;
 
-    if (!complete) {
-      scoreHTML = `
-        <div class="score-box">
-          <input type="number" placeholder="0" oninput="handleScoreInput(${match.set}, this)">
-          <span>-</span>
-          <input type="number" placeholder="0" oninput="handleScoreInput(${match.set}, this)">
+    games.forEach((g, i) => {
+      const score = match.scores?.[i] || "";
+      const complete = score.includes("-");
+
+      let rightSide = "";
+
+      if (!complete) {
+        rightSide = `
+          <div class="score-input-modern">
+            <input type="number" oninput="updateScore(${match.set}, ${i}, this)">
+            <span>-</span>
+            <input type="number" oninput="updateScore(${match.set}, ${i}, this)">
+          </div>
+        `;
+      } else {
+        const [a, b] = score.split("-").map(Number);
+        const isWin = a > b;
+
+        rightSide = `
+          <div class="score-display">${score}</div>
+          <div class="${isWin ? "win" : "loss"}">
+            ${isWin ? "WIN" : "LOSS"}
+          </div>
+        `;
+      }
+
+      container.innerHTML += `
+        <div class="match-card">
+          <div class="left">
+            <div class="game-label">${g}</div>
+            <div class="teamA">${match.teamA}</div>
+            <div class="teamB">${match.teamB}</div>
+          </div>
+
+          <div class="right">
+            ${rightSide}
+            <div id="status-${match.set}-${i}"></div>
+          </div>
         </div>
       `;
-    } else {
-      scoreHTML = `
-        <div class="score-display" onclick="editScore(${match.set}, '${score}')">
-          ${score}
-        </div>
-      `;
-    }
+    });
 
-    container.innerHTML += `
-      <div class="match-row">
-        <div class="teams">
-          <div class="teamA">${match.teamA}</div>
-          <div class="teamB">${match.teamB}</div>
-        </div>
-
-        <div class="score-area">
-          ${scoreHTML}
-          <div id="status-${match.set}"></div>
-        </div>
-      </div>
-    `;
+    container.innerHTML += `</div>`;
   });
 }
-
 
 function handleScoreInput(set, input) {
   const parent = input.parentElement;
@@ -101,9 +115,8 @@ function handleScoreInput(set, input) {
     const score = `${inputs[0].value}-${inputs[1].value}`;
 
     callAPI({
-      action: "score",
+      action: "submitScore",
       set,
-      game: 1,
       score
     });
 
@@ -133,9 +146,8 @@ function editScore(set, current) {
   if (!newScore) return;
 
   callAPI({
-    action: "score",
+    action: "submitScore",
     set,
-    game: 1,
     score: newScore
   });
 
@@ -214,7 +226,7 @@ function markSent(btn) {
 
 function showSuccess(id) {
   const el = document.getElementById(id);
-  el.innerHTML = `<div class="success">✔ Saved</div>`;
+  el.innerHTML = `<div class="success">✔ Score Saved</div>`;
 
   setTimeout(() => el.innerHTML = "", 1500);
 }
@@ -254,14 +266,13 @@ let chart;
 
 async function loadRankings() {
   const data = await callAPI({ action: "getUserTrend" });
-  log("RANKINGS DATA", data);
 
-  if (!data || data.length === 0) return;
+  if (!data.length) return;
 
   const latest = data[data.length - 1];
 
-  document.getElementById("bigStat").innerText = latest.winPct.toFixed(2);
-  document.getElementById("topPercent").innerText = "Top 6%";
+  document.getElementById("bigStat").innerText =
+    (latest.winPct * 100).toFixed(2) + "%";
 
   if (chart) chart.destroy();
 
@@ -270,18 +281,19 @@ async function loadRankings() {
     data: {
       labels: data.map((_, i) => i),
       datasets: [{
-        data: data.map(p => p.winPct),
+        data: data.map(p => p.winPct * 100),
         borderColor: "#00c853",
         borderWidth: 3,
-        tension: 0.4,
-        pointRadius: 3
+        tension: 0.4
       }]
     },
     options: {
-      plugins: { legend: { display: false } },
       scales: {
-        x: { display: false },
-        y: { display: false }
+        y: {
+          ticks: {
+            callback: v => v + "%"
+          }
+        }
       }
     }
   });
@@ -303,11 +315,42 @@ function swipe(direction) {
 
 
 
+async function finishDay() {
+  const res = await callAPI({ action: "done" });
+
+  document.getElementById("dayStats").innerHTML = `
+    <div class="success">
+      ✔ Day Complete<br>
+      Wins: ${res.wins || 0}<br>
+      Losses: ${res.losses || 0}
+    </div>
+  `;
+}
+
 
 function toggleMenu() {
   document.getElementById("sideMenu").classList.toggle("open");
   document.getElementById("overlay").classList.toggle("show");
 }
+
+function updateScore(set, gameIndex, input) {
+  const row = input.parentElement;
+  const inputs = row.querySelectorAll("input");
+
+  if (inputs[0].value && inputs[1].value) {
+    const score = `${inputs[0].value}-${inputs[1].value}`;
+
+    callAPI({
+      action: "submitScore",
+      set,
+      game: gameIndex + 1,
+      score
+    });
+
+    showSuccess(`status-${set}-${gameIndex}`);
+  }
+}
+
 
 function navigate(page) {
   showPage(page);
