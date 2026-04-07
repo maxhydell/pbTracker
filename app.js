@@ -1,4 +1,4 @@
-const API_URL = "https://script.google.com/macros/s/AKfycbwFNYYCdmEoQ5IwtDBD7gAY-xgwa61Tek72pMmk6HeNUFAPDhV45tloni6Sl8ErOdMt/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbw3JjBZFiTVY-KYQ91oc-57HWDbGvK8ErBmvTi025bM8ZsjWdlfMSi2R2Oi6wtAAB0d/exec";
 
 function log(label, data) {
   console.log("🔥", label, data);
@@ -58,10 +58,21 @@ function formatNames(str) {
 }
 
 async function callAPI(params) {
-  const query = new URLSearchParams(params).toString();
+  try {
+    const query = new URLSearchParams(params).toString();
+    const res = await fetch(`${API_URL}?${query}`);
+    const text = await res.text();
 
-  const res = await fetch(`${API_URL}?${query}`);
-  return await res.json();
+    try {
+      return JSON.parse(text);
+    } catch {
+      console.error("INVALID JSON:", text);
+      return null;
+    }
+  } catch (err) {
+    console.error("API ERROR:", err);
+    return null;
+  }
 }
 
 async function loadSets() {
@@ -122,6 +133,8 @@ async function loadSets() {
 
     container.appendChild(setWrapper);
   });
+
+
 }
 
 
@@ -149,6 +162,7 @@ function editScore(set, current) {
 async function generateGames() {
   haptic();
   await callAPI({ action: "games" });
+  await loadSets(); // 🔥 refresh
 }
 
 async function completeDay() {
@@ -269,6 +283,11 @@ async function finishDay() {
   `;
 }
 
+if (!data || !Array.isArray(data)) {
+  container.innerHTML = "No matches found";
+  return;
+}
+
 
 function toggleMenu() {
   document.getElementById("sideMenu").classList.toggle("open");
@@ -305,9 +324,13 @@ function navigate(page) {
 }
 
 window.onload = async () => {
-  await loadSets();
+  try {
+    await loadSets();
+  } catch (err) {
+    console.error("LOAD FAILED", err);
+  }
 
-  // ✅ HIDE LOADING SCREEN
+  // ALWAYS RUN THIS
   const loading = document.getElementById("loading-screen");
   if (loading) {
     loading.style.opacity = "0";
