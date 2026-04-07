@@ -80,7 +80,18 @@ async function loadSets() {
   log("SETS DATA", data);
 
   const container = document.getElementById("setsContainer");
+
+
+  if (!data || !Array.isArray(data)) {
+    container.innerHTML = "No matches found";
+    return;
+  }
+
+
   container.innerHTML = `<h2 class="section-title">Pool Play Matches</h2>`;
+
+
+
 
   data.forEach(match => {
     // Creating the container for the specific Set
@@ -283,10 +294,6 @@ async function finishDay() {
   `;
 }
 
-if (!data || !Array.isArray(data)) {
-  container.innerHTML = "No matches found";
-  return;
-}
 
 
 function toggleMenu() {
