@@ -86,7 +86,9 @@ async function loadSets() {
 
       let rightSide = "";
 
-      const [a = 0, b = 0] = score ? score.split("-") : [0, 0];
+      const [a, b] = score && score.includes("-")
+      ? score.split("-")
+      : [0, 0];
 
       let result = "tie";
       if (a > b) result = "win";
@@ -94,16 +96,15 @@ async function loadSets() {
 
       rightSide = `
         <div class="score-editable">
-          <input value="${a}" oninput="updateScore(${match.set}, ${i}, this)">
+          <input type="number" value="${a}" oninput="updateScore(${match.set}, ${i}, this)">
           <span>-</span>
-          <input value="${b}" oninput="updateScore(${match.set}, ${i}, this)">
+          <input type="number" value="${b}" oninput="updateScore(${match.set}, ${i}, this)">
         </div>
      
         <div class="${result}">
           ${result.toUpperCase()}
         </div>
       `;
-    }
 
       container.innerHTML += `
         <div class="match-card">
