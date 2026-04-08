@@ -89,7 +89,6 @@ async function loadSets() {
   }
 
 
-  container.innerHTML = `<h2 class="section-title">Pool Play Matches</h2>`;
 
 
 
@@ -116,11 +115,7 @@ async function loadSets() {
       if (Number(a) > Number(b)) result = "win";
       else if (Number(b) > Number(a)) result = "loss";
 
-      const card = input.closest(".match-card");
-      const badge = card.querySelector(".status-badge");
 
-      badge.className = `status-badge ${result}`;
-      badge.innerText = result;
 
       // Match Card structured like the screenshot
       const matchCard = `
@@ -316,6 +311,21 @@ function updateScore(set, gameIndex, input) {
   scoreTimeout = setTimeout(() => {
     const score = `${inputs[0].value}-${inputs[1].value}`;
     input.blur();
+    const a = Number(inputs[0].value);
+    const b = Number(inputs[1].value);
+
+    let result = "tie";
+    if (a > b) result = "win";
+    else if (b > a) result = "loss";
+
+    const card = input.closest(".match-card");
+    if (!card) return;
+
+    const badge = card.querySelector(".status-badge");
+    if (!badge) return;
+
+    badge.className = `status-badge ${result}`;
+    badge.innerText = result;
 
     console.log("📤 Sending score:", {
       set,
