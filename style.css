@@ -11,8 +11,22 @@ body {
 }
 
 /* =========================
-   TEXT / HEADERS
+   TEXT / HEADERS / set ui
 ========================= */
+
+.set-header {
+  display: flex;
+  justify-content: space-between;
+  cursor: pointer;
+}
+
+.carrot {
+  transition: transform 0.2s;
+}
+
+.set-header.active .carrot {
+  transform: rotate(180deg);
+}
 
 
 /* =========================
@@ -159,6 +173,81 @@ body {
   color: #6b7280;
   font-weight: 600;
   margin-top: 2px;
+}
+
+/* leaderboard */
+.leaderboard {
+  margin-top: 20px;
+}
+
+.leaderboard-header,
+.leaderboard-row {
+  display: grid;
+  grid-template-columns: 40px 1fr 80px 100px;
+  padding: 10px;
+  border-bottom: 1px solid rgba(255,255,255,0.1);
+}
+
+.leaderboard-row.you {
+  background: rgba(0,200,83,0.2);
+  border-radius: 8px;
+}
+
+
+/* schedule */
+.day-card {
+  background: #1a1614;
+  border-radius: 16px;
+  margin-bottom: 12px;
+}
+
+.day-header {
+  display: flex;
+  justify-content: space-between;
+  padding: 16px;
+}
+
+.day-body {
+  display: none;
+  padding: 12px;
+}
+
+.player-slot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.player-input {
+  flex: 1;
+  padding: 10px;
+  border-radius: 10px;
+  background: #111;
+  color: white;
+}
+
+.sms-btn, .check-btn {
+  width: 28px;
+  height: 28px;
+  cursor: pointer;
+}
+
+.tag {
+  background: #00c853;
+  padding: 4px 8px;
+  border-radius: 6px;
+}
+
+.autocomplete {
+  background: #111;
+  position: absolute;
+  z-index: 10;
+}
+
+.auto-item {
+  padding: 8px;
+  cursor: pointer;
 }
 
 /* =========================
@@ -509,4 +598,30 @@ button:active {
   button {
     background: #0a84ff;
   }
+}
+
+/* new */
+.modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.6);
+  display: none;
+  justify-content: center;
+  align-items: center;
+  z-index: 9999;
+}
+
+.modal-content {
+  background: #1a1614;
+  padding: 20px;
+  border-radius: 16px;
+  width: 80%;
+}
+
+.modal-content input {
+  width: 100%;
+  margin-bottom: 10px;
+  padding: 12px;
+  border-radius: 10px;
+  border: none;
 }

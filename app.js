@@ -1,4 +1,4 @@
-const API_URL = "https://script.google.com/macros/s/AKfycbzvGmbx0P4P-LwHeNfvT0ILG0xPON95wEddzrqbImI6wA59VuEmnsIUtoYM5-px4SIB/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbweKxdOu42O-C_AgIXxlHNSDssomGa_7IJi2XaCU4HdwDvGjDNVCQz_Nj1THSe9fFRB/exec";
 
 function log(label, data) {
   console.log("🔥", label, data);
@@ -27,6 +27,15 @@ document.addEventListener("touchend", () => {
   clearTimeout(holdTimer);
   holdTimer = null;
 });
+
+
+
+let playersCache = [];
+
+async function loadPlayers() {
+  playersCache = await callAPI({ action: "getPlayers" });
+}
+
 
 function haptic() {
   if (navigator.vibrate) navigator.vibrate(10);
@@ -98,7 +107,13 @@ async function loadSets() {
     // Creating the container for the specific Set
     const setWrapper = document.createElement("div");
     setWrapper.className = "set-container";
-    setWrapper.innerHTML = `<div class="set-title">Round ${match.set}</div>`;
+    setWrapper.innerHTML = `
+      <div class="set-header" onclick="toggleSet(this)">
+        <span>Set ${match.set}</span>
+       <span class="carrot">⌄</span>
+      </div>
+      <div class="set-body"></div>
+    `;
 
     const games = ["G1", "G2", "G3"];
 
@@ -148,7 +163,7 @@ async function loadSets() {
           </div>
         </div>
       `;
-      setWrapper.innerHTML += matchCard;
+      setWrapper.querySelector(".set-body").innerHTML += matchCard;
     });
 
     container.appendChild(setWrapper);
@@ -159,7 +174,14 @@ async function loadSets() {
 
 
 
+function toggleSet(el) {
+  const body = el.nextElementSibling;
 
+  el.classList.toggle("active");
+
+  body.style.display =
+    body.style.display === "none" ? "block" : "none";
+}
 
 
 function editScore(set, current) {
@@ -176,28 +198,189 @@ function editScore(set, current) {
 }
 
 
+function sendSMS(btn, date, col) {
+  const input = btn.parentElement.querySelector("input");
+  const name = input.value;
+
+  const player = playersCache.find(p =>
+    p.name.toLowerCase() === name.toLowerCase()
+  );
+
+  if (!player || !player.phone) return alert("No phone");
+
+  const day = new Date(date).toLocaleDateString("en-US",{weekday:"long"});
+
+  const messages = [
+    `Hey do you want to play 6:30am @ the Y ${day}?`,
+    `Can you play 6:30am @ the Y ${day}?`,
+    `Are you in for 6:30am @ the Y ${day}?`
+  ];
+
+  const msg = messages[Math.floor(Math.random()*messages.length)];
+
+  const link = `https://maxhydell.github.io/smsLinker/?to=${encodeURIComponent(player.phone)}&body=${encodeURIComponent(msg)}`;
+
+  window.open(link, "_blank");
+
+  // auto mark as sent
+  const check = btn.parentElement.querySelector(".check-btn");
+  check.src = "orange.png";
+  check.dataset.state = 1;
+
+  callAPI({
+    action: "updatePlayerStatus",
+    date,
+    col,
+    status: 1
+  });
+}
 
 
 
+async function addPlayerPrompt() {
+  const name = prompt("Name");
+  const phone = prompt("Phone");
+  const rating = prompt("Rating");
 
+  if (!name) return;
+
+  document.body.innerHTML += `<div class="loading">Adding...</div>`;
+
+  await callAPI({
+    action: "addPlayer",
+    name,
+    phone,
+    rating
+  });
+
+  location.reload();
+}
+
+
+
+function toggleCheck(btn, date, col) {
+  const input = btn.parentElement.querySelector("input");
+
+  let state = Number(btn.dataset.state || 0);
+
+  if (state === 0) {
+    btn.src = "orange.png";
+    btn.dataset.state = 1;
+
+    callAPI({
+      action: "updatePlayerStatus",
+      date,
+      col,
+      status: 1
+    });
+
+    return;
+  }
+
+  if (state === 1) {
+    btn.src = "green.png";
+    btn.dataset.state = 2;
+
+    input.disabled = true;
+    input.style.border = "2px solid #00c853";
+
+    callAPI({
+      action: "updatePlayerStatus",
+      date,
+      col,
+      status: 2
+    });
+  }
+}
+
+
+function openAddPlayer() {
+  document.getElementById("addModal").style.display = "flex";
+}
+
+async function submitNewPlayer() {
+  const name = newName.value;
+  const phone = newPhone.value;
+  const rating = newRating.value;
+
+  await callAPI({
+    action: "addPlayer",
+    name,
+    phone,
+    rating
+  });
+
+  location.reload();
+}
 
 
 async function loadSchedule() {
   const data = await callAPI({ action: "getSchedule" });
 
+  function getWinPct(name) {
+    const p = rankings.find(x =>
+      x.name.toLowerCase() === (name || "").toLowerCase()
+    );
+    return p?.winPct || 0;
+  }
+
   const container = document.getElementById("scheduleList");
 
-  container.innerHTML = data.map(p => `
-    <div class="card">
-      ${p.name}
-      <button onclick="markSent(this)">Text</button>
-    </div>
-  `).join("");
-}
+  let topDayIndex = -1;
+  let bestAvg = 0;
 
-function markSent(btn) {
-  btn.innerText = "✓";
-  btn.style.background = "#00c853";
+  data.forEach((row, i) => {
+    const vals = row.players
+      .map(p => getWinPct(p))
+      .filter(v => v > 0);
+
+    const avg = vals.length
+      ? vals.reduce((a, b) => a + b, 0) / vals.length
+      : 0;
+
+    if (avg > bestAvg) {
+      bestAvg = avg;
+      topDayIndex = i;
+    }
+  });
+
+  container.innerHTML = data.map((row, i) => {
+    const d = new Date(row.date);
+    const dayName = d.toLocaleDateString("en-US",{weekday:"long"});
+
+    const players = row.players
+      .filter(Boolean)
+      .map(p => capitalize(p))
+      .join(", ");
+
+    return `
+      <div class="day-card">
+        <div class="day-header" onclick="toggleSet(this)">
+          <div>
+            <div class="day-players">${players}</div>
+            <div class="day-name">${dayName}</div>
+          </div>
+
+          ${i === topDayIndex ? `<div class="tag">Top Day</div>` : ""}
+
+          <div class="carrot">⌄</div>
+        </div>
+
+        <div class="day-body">
+          ${[0,1,2,3].map(col => `
+            <div class="player-slot">
+              <input class="player-input"
+                placeholder="Add player..."
+                onfocus="attachAutocomplete(this, '${row.date}', ${col+3})">
+
+              <img src="imessage.png" class="sms-btn" onclick="sendSMS(this)">
+              <img src="white.png" class="check-btn" onclick="toggleCheck(this)">
+            </div>
+          `).join("")}
+        </div>
+      </div>
+    `;
+  }).join("");
 }
 
 
@@ -238,24 +421,50 @@ function renderChart(data) {
 
 let chart;
 
+let selectedPlayer = "max";
+
 async function loadRankings() {
   const data = await callAPI({ action: "getUserTrend" });
+  if (!data || !data.length) return;
 
-  if (!data.length) return;
+  // SORT BY WIN %
+  data.sort((a, b) => b.winPct - a.winPct);
 
-  const latest = data[data.length - 1];
+  // POPULATE DROPDOWN
+  const select = document.getElementById("playerSelect");
+  select.innerHTML = data.map(p =>
+    `<option value="${p.name.toLowerCase()}">${capitalize(p.name)}</option>`
+  ).join("");
 
+  // DEFAULT SELECT
+  select.value = selectedPlayer;
+
+  const player = data.find(p => p.name.toLowerCase() === select.value);
+  selectedPlayer = select.value;
+
+  // BIG STAT
   document.getElementById("bigStat").innerText =
-    (latest.winPct * 100).toFixed(2) + "%";
+    (player.winPct * 100).toFixed(2) + "%";
+
+  // RANK
+  const rank = data.findIndex(p => p.name === player.name) + 1;
+  document.getElementById("topPercent").innerText =
+    `#${rank} Place`;
+
+  // GRAPH DATA
+  const values = data.map(p => p.winPct * 100);
+
+  const max = Math.max(...values) + 8;
+  const min = Math.min(...values) - 8;
 
   if (chart) chart.destroy();
 
   chart = new Chart(document.getElementById("chart"), {
     type: "line",
     data: {
-      labels: data.map((_, i) => i),
+      labels: data.map(p => capitalize(p.name)),
       datasets: [{
-        data: data.map(p => p.winPct * 100),
+        data: values,
         borderColor: "#00c853",
         borderWidth: 3,
         tension: 0.4
@@ -264,6 +473,8 @@ async function loadRankings() {
     options: {
       scales: {
         y: {
+          min,
+          max,
           ticks: {
             callback: v => v + "%"
           }
@@ -271,12 +482,42 @@ async function loadRankings() {
       }
     }
   });
+
+  renderLeaderboard(data);
+}
+
+function capitalize(name) {
+  return name.charAt(0).toUpperCase() + name.slice(1).toLowerCase();
 }
 
 
 const pages = ["rankings","schedule","sets","input"];
 let currentPage = 0;
 
+
+function renderLeaderboard(data) {
+  const container = document.getElementById("leaderboard");
+
+  container.innerHTML = `
+    <div class="leaderboard">
+      <div class="leaderboard-header">
+        <span>Rank</span>
+        <span>Player</span>
+        <span>Win %</span>
+        <span>Points Avg.</span>
+      </div>
+
+      ${data.map((p, i) => `
+        <div class="leaderboard-row ${p.name.toLowerCase() === "max" ? "you" : ""}">
+          <span>${i + 1}</span>
+          <span>${capitalize(p.name)}</span>
+          <span>${(p.winPct * 100).toFixed(2)}%</span>
+          <span>${p.pointsAvg.toFixed(2)}</span>
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
 
 
 
@@ -300,6 +541,38 @@ function toggleMenu() {
 }
 
 let scoreTimeout;
+
+function attachAutocomplete(input, date, col) {
+  const dropdown = document.createElement("div");
+  dropdown.className = "autocomplete";
+
+  input.parentNode.appendChild(dropdown);
+
+  input.addEventListener("input", () => {
+    const val = input.value.toLowerCase();
+
+    dropdown.innerHTML = playersCache
+      .filter(p => p.name.toLowerCase().includes(val))
+      .slice(0, 5)
+      .map(p => `<div class="auto-item">${capitalize(p.name)}</div>`)
+      .join("");
+
+    dropdown.querySelectorAll(".auto-item").forEach(el => {
+      el.onclick = () => {
+        input.value = el.innerText;
+        dropdown.innerHTML = "";
+
+        callAPI({
+          action: "updateSchedule",
+          date,
+          col,
+          name: el.innerText
+        });
+      };
+    });
+  });
+}
+
 
 function updateScore(set, gameIndex, input) {
   clearTimeout(scoreTimeout);
@@ -355,6 +628,7 @@ function navigate(page) {
 window.onload = async () => {
   try {
     await loadSets();
+    await loadPlayers();
   } catch (err) {
     console.error("LOAD FAILED", err);
   }
