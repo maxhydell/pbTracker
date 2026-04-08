@@ -90,6 +90,7 @@ async function loadSets() {
   log("SETS DATA", data);
 
   const container = document.querySelector("#input #setsContainer");
+  container.innerHTML = "";
   if (!container) return;
 
 
@@ -316,6 +317,7 @@ async function submitNewPlayer() {
 
 async function loadSchedule() {
   const data = await callAPI({ action: "getSchedule" });
+  const rankings = await callAPI({ action: "getUserTrend" });
 
   function getWinPct(name) {
     const p = rankings.find(x =>
@@ -367,23 +369,35 @@ async function loadSchedule() {
         </div>
 
         <div class="day-body">
-          ${[0,1,2,3].map(col => `
-            <div class="player-slot">
-              <input class="player-input"
-                placeholder="Add player..."
-                onfocus="attachAutocomplete(this, '${row.date}', ${col+3})">
+          ${[0,1,2,3].map(col => {
+            const status = row.status?.[col] || 0;
 
-              <img src="imessage.png" class="sms-btn" onclick="sendSMS(this)">
-              <img src="white.png" class="check-btn" onclick="toggleCheck(this)">
-            </div>
-          `).join("")}
+            let img = "white.png";
+            if (status == 1) img = "orange.png";
+            if (status == 2) img = "green.png";
+
+            return `
+              <div class="player-slot">
+                <input class="player-input"
+                  placeholder="Add player..."
+                  ${status == 2 ? "disabled style='border:2px solid #00c853'" : ""}
+                  onfocus="attachAutocomplete(this, '${row.date}', ${col+3})">
+
+                <img src="imessage.png" class="sms-btn"
+                  ${status == 2 ? "style='display:none'" : ""}
+                  onclick="sendSMS(this, '${row.date}', ${col+1})">
+
+                <img src="${img}" class="check-btn"
+                  data-state="${status}"
+                  onclick="toggleCheck(this, '${row.date}', ${col+1})">
+              </div>
+            `;
+          }).join("")}
         </div>
       </div>
     `;
   }).join("");
 }
-
-
 
 function showSuccess(id) {
   const el = document.getElementById(id);
