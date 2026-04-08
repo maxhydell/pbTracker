@@ -80,7 +80,8 @@ async function loadSets() {
   const data = await callAPI({ action: "getTodaySets" });
   log("SETS DATA", data);
 
-  const container = document.getElementById("setsContainer");
+  const container = document.querySelector("#input #setsContainer");
+  if (!container) return;
 
 
   if (!data || !Array.isArray(data)) {
@@ -107,8 +108,8 @@ async function loadSets() {
 
       if (score && score.includes("-")) {
         const parts = score.split("-");
-        a = parts[0];
-        b = parts[1];
+        a = Number(parts[0]);
+        b = Number(parts[1]);
       }
 
       let result = "tie";
