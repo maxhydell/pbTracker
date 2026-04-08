@@ -1,4 +1,4 @@
-const API_URL = "https://script.google.com/macros/s/AKfycbzEeWxGI812M9EFCxpchpkMJ_CUE5gU2GKfvI7u5RnqX4szgYJNTl68F7Dq-1C-5AuY/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbx6UcZhKEePkGKIgqoWiKyGAl6EzvF3wiAP9aLaDjNiW6DT6nb0l8tsJc7HIqLhRMG7/exec";
 
 function log(label, data) {
   console.log("🔥", label, data);
