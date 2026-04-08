@@ -116,6 +116,12 @@ async function loadSets() {
       if (Number(a) > Number(b)) result = "win";
       else if (Number(b) > Number(a)) result = "loss";
 
+      const card = input.closest(".match-card");
+      const badge = card.querySelector(".status-badge");
+
+      badge.className = `status-badge ${result}`;
+      badge.innerText = result;
+
       // Match Card structured like the screenshot
       const matchCard = `
         <div class="match-card">
@@ -132,16 +138,16 @@ async function loadSets() {
           <div class="right-content">
             <div class="score-editable">
               <input type="number" inputmode="numeric"
-                value="${a}" 
+                value="${a === 0 ? '' : a}" 
                 oninput="updateScore(${match.set}, ${i}, this)" 
                 onblur="this.blur()">
               <span class="score-separator">-</span>
               <input type="number" inputmode="numeric"
-                value="${b}" 
+                value="${b === 0 ? '' : b}" 
                 oninput="updateScore(${match.set}, ${i}, this)" 
                 onblur="this.blur()">
             </div>
-            <div class="meta-info">G${i+1} • Set ${match.set}</div>
+            <div class="meta-info">Game ${i+1} • Set ${match.set}</div>
             <div id="status-${match.set}-${i}"></div>
           </div>
         </div>
@@ -176,17 +182,6 @@ function editScore(set, current) {
 
 
 
-// ACTIONS
-async function generateGames() {
-  haptic();
-  await callAPI({ action: "games" });
-  await loadSets(); // 🔥 refresh
-}
-
-async function completeDay() {
-  haptic();
-  await callAPI({ action: "done" });
-}
 
 
 
@@ -320,12 +315,21 @@ function updateScore(set, gameIndex, input) {
 
   scoreTimeout = setTimeout(() => {
     const score = `${inputs[0].value}-${inputs[1].value}`;
+    input.blur();
+
+    console.log("📤 Sending score:", {
+      set,
+      game: gameIndex + 1,
+      score
+    });
 
     callAPI({
       action: "submitScore",
       set,
       game: gameIndex + 1,
       score
+    }).then(res => {
+      console.log("✅ API RESPONSE:", res);
     });
 
     showSuccess(`status-${set}-${gameIndex}`);
