@@ -1,4 +1,4 @@
-const API_URL = "https://script.google.com/macros/s/AKfycbxsAHAp4N6qK_MP-Ax0T8CRdNUhae0iQbcx3mT8kM8ia0U4i7R7KqOkPf89T_7HIfEy/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbzCja87dn2eWrpOEA5SltOI8XM8tryMFq-fZRnFwIN2Wh0i7IENT-ZKDj49uC_lBywn/exec";
 
 function log(label, data) {
   console.log("🔥", label, data);
@@ -316,6 +316,7 @@ async function submitNewPlayer() {
 
 
 async function loadSchedule() {
+  setWeekRange();
   console.log("🚀 loadSchedule called");
 
   const data = await callAPI({ action: "getSchedule" });
@@ -327,6 +328,15 @@ async function loadSchedule() {
     return;
   }
 
+
+  console.log("📊 SCHEDULE LENGTH:", data.length);
+
+  data.forEach((row, i) => {
+    console.log(`Row ${i}:`, row.date, row.players);
+  });
+
+
+
   const rankings = await callAPI({ action: "getUserTrend" });
 
   function getWinPct(name) {
@@ -337,6 +347,12 @@ async function loadSchedule() {
   }
 
   const container = document.getElementById("scheduleList");
+
+  if (!data.length) {
+    console.warn("⚠️ No schedule for this week");
+    container.innerHTML = "No games scheduled this week";
+    return;
+  }
 
   let topDayIndex = -1;
   let bestAvg = 0;
@@ -361,9 +377,14 @@ async function loadSchedule() {
     const d = new Date(row.date);
     const dayName = d.toLocaleDateString("en-US",{weekday:"long"});
 
+    if (!data.length) {
+      container.innerHTML = "No schedule found";
+      return;
+    }
+
     const players = row.players
       .filter(Boolean)
-      .map(p => capitalize(p))
+      .map(p => p ? capitalize(p) : "")
       .join(", ");
 
     return `
@@ -466,10 +487,14 @@ async function loadRankings() {
   }
 
   // DEFAULT SELECT
-  select.value = selectedPlayer;
+  if (!select.value) {
+    select.value = selectedPlayer;
+  }
 
-  const player = data.find(p => p.name.toLowerCase() === select.value);
-  selectedPlayer = select.value || selectedPlayer;
+  selectedPlayer = select.value;
+
+  selectedPlayer = select.value;
+  const player = data.find(p => p.name.toLowerCase() === selectedPlayer);
 
   // BIG STAT
   document.getElementById("bigStat").innerText =
@@ -478,11 +503,12 @@ async function loadRankings() {
 
   //analytics
 
-  const historyData = await callAPI({ action: "getHistory" });
+  const history = await callAPI({ action: "getHistory" });
+  renderDashboardAnalytics(history, selectedPlayer);
 
-  const streak = getWinStreak(historyData, selectedPlayer);
-  const best = getBestDay(historyData, selectedPlayer);
-  const consistency = getConsistency(historyData, selectedPlayer);
+  const streak = getWinStreak(history, selectedPlayer);
+  const best = getBestDay(history, selectedPlayer);
+  const consistency = getConsistency(history, selectedPlayer);
 
   document.getElementById("analytics").innerHTML = `
     <div>🔥 Streak: ${streak}</div>
@@ -498,10 +524,11 @@ async function loadRankings() {
     `#${rank} Place`;
 
   // GRAPH DATA
-const history = await callAPI({ action: "getHistory" });
+
 
 const playerHistory = history
   .filter(p => p.name.toLowerCase() === selectedPlayer)
+  .slice(-30)   // 🔥 HUGE SPEED BOOST
   .map(p => ({
     date: new Date(p.date).toLocaleDateString("en-US", {
       month: "numeric",
@@ -509,6 +536,8 @@ const playerHistory = history
     }),
     value: Math.round(p.winPct * 100)
   }));
+  
+
 
 const values = playerHistory.map(x => x.value);
 
@@ -517,6 +546,8 @@ const latest = values[values.length - 1] || 50;
 const max = latest + 8;
 const min = latest - 8;
 
+
+if (chart) chart.destroy();
 chart = new Chart(document.getElementById("chart"), {
   type: "line",
   data: {
@@ -528,6 +559,12 @@ chart = new Chart(document.getElementById("chart"), {
     }]
   },
   options: {
+    layout: {
+      padding: {
+        top: 0,
+        bottom: 0
+      }
+    },
     scales: {
       y: {
         min,
@@ -574,7 +611,7 @@ function renderLeaderboard(data) {
       </div>
 
       ${data.map((p, i) => `
-        <div class="leaderboard-row ${p.name.toLowerCase() === "max" ? "you" : ""}">
+        <div class="leaderboard-row ${p.name.toLowerCase() === selectedPlayer ? "you" : ""}">
           <span>${i + 1}</span>
           <span>${capitalize(p.name)}</span>
           <span>${Math.round(p.winPct * 100)}%</span>
@@ -632,6 +669,24 @@ function getBestDay(history, player) {
 }
 
 
+function getConsistency(history, player) {
+  const games = history
+    .filter(p => p.name.toLowerCase() === player)
+    .map(p => p.winPct);
+
+  if (games.length < 2) return 0;
+
+  const avg = games.reduce((a, b) => a + b, 0) / games.length;
+
+  const variance = games.reduce((sum, val) =>
+    sum + Math.pow(val - avg, 2), 0
+  ) / games.length;
+
+  const stdDev = Math.sqrt(variance);
+
+  return Math.round((1 - stdDev) * 100);
+}
+
 
 function toggleMenu() {
   document.getElementById("sideMenu").classList.toggle("open");
@@ -670,6 +725,29 @@ function attachAutocomplete(input, date, col) {
     });
   });
 }
+
+
+function setWeekRange() {
+  const today = new Date();
+
+  const day = today.getDay();
+  const diffToMonday = (day === 0 ? -6 : 1 - day);
+
+  const monday = new Date(today);
+  monday.setDate(today.getDate() + diffToMonday);
+
+  const friday = new Date(monday);
+  friday.setDate(monday.getDate() + 4);
+
+  const format = d =>
+    `${d.getMonth()+1}/${d.getDate()}`;
+
+  const el = document.getElementById("weekRange");
+  if (el) {
+    el.innerText = `${format(monday)} - ${format(friday)}`;
+  }
+}
+
 
 
 function updateScore(set, gameIndex, input) {
@@ -729,6 +807,29 @@ function updateScore(set, gameIndex, input) {
 }
 
 
+
+function renderDashboardAnalytics(history, player) {
+  const games = history.filter(p => p.name.toLowerCase() === player);
+
+  if (!games.length) return;
+
+  const avgWin = games.reduce((a,b)=>a+b.winPct,0)/games.length;
+  const avgPoints = games.reduce((a,b)=>a+b.pointsAvg,0)/games.length;
+
+  const best = getBestDay(history, player);
+  const streak = getWinStreak(history, player);
+
+  document.getElementById("dashboardAnalytics").innerHTML = `
+    <div class="analytics-card green">🔥 Win %: ${Math.round(avgWin*100)}%</div>
+    <div class="analytics-card blue">🎯 Avg Pts: ${avgPoints.toFixed(1)}</div>
+    <div class="analytics-card yellow">🏆 Best Day: ${best ? Math.round(best.winPct*100)+"%" : "--"}</div>
+    <div class="analytics-card red">📉 Streak: ${streak}</div>
+  `;
+}
+
+
+
+
 function navigate(page) {
   showPage(page);
 }
@@ -740,6 +841,10 @@ window.onload = async () => {
   } catch (err) {
     console.error("LOAD FAILED", err);
   }
+
+
+  const history = await callAPI({ action: "getHistory" });
+  renderDashboardAnalytics(history, selectedPlayer);
 
   // ALWAYS RUN THIS
   const loading = document.getElementById("loading-screen");
