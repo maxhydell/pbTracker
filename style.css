@@ -162,6 +162,7 @@ h1, h2 {
   gap: 4px;
 }
 
+
 .left-content {
   display: flex;
   flex-direction: column;
@@ -310,12 +311,7 @@ h1, h2 {
   overflow: hidden;
 }
 
-.player-slot {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 8px;
-}
+
 
 
 
@@ -791,6 +787,35 @@ button:active {
   padding: 12px;
   border-radius: 12px;
   font-size: 13px;
+
+.analytics-big {
+  background: rgba(20,20,20,0.9);
+  border-radius: 16px;
+  padding: 15px;
+  margin-bottom: 20px;
+}
+
+.analytics-grid-4 {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+}
+
+.stat {
+  font-size: 12px;
+  padding: 10px;
+  border-radius: 10px;
+}
+
+.stat.green { border-left: 4px solid #00c853; }
+.stat.blue { border-left: 4px solid #2196f3; }
+.stat.red { border-left: 4px solid #ff3b30; }
+.stat.yellow { border-left: 4px solid #ffc107; }
+.stat.purple { border-left: 4px solid #9c27b0; }
+.stat.teal { border-left: 4px solid #00bcd4; }
+.stat.orange { border-left: 4px solid #ff9800; }
+.stat.gray { border-left: 4px solid #aaa; }
+
 }
 
 .analytics-card.green { border-left: 4px solid #00c853; }

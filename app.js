@@ -1,4 +1,4 @@
-const API_URL = "https://script.google.com/macros/s/AKfycbzCja87dn2eWrpOEA5SltOI8XM8tryMFq-fZRnFwIN2Wh0i7IENT-ZKDj49uC_lBywn/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbwOujlf9US-wllY8MzMiiTFMVnJBRol7eCIqfvmChEK0RO-pw5_5Oq4RsRmOu6jhKyc/exec";
 
 function log(label, data) {
   console.log("🔥", label, data);
@@ -100,10 +100,6 @@ async function loadSets() {
   }
 
 
-
-
-
-
   data.forEach(match => {
     // Creating the container for the specific Set
     const setWrapper = document.createElement("div");
@@ -121,6 +117,22 @@ async function loadSets() {
     games.forEach((g, i) => {
       const score = match.scores?.[i] || "0-0";
       let a = 0, b = 0;
+
+      const game1 = match.scores?.[0] || "";
+      const game2 = match.scores?.[1] || "";
+
+      const isGame3Locked =
+        i === 2 &&
+        game1.includes("-") &&
+        game2.includes("-") &&
+        (
+          (Number(game1.split("-")[0]) > Number(game1.split("-")[1]) &&
+           Number(game2.split("-")[0]) > Number(game2.split("-")[1])) ||
+          (Number(game1.split("-")[1]) > Number(game1.split("-")[0]) &&
+           Number(game2.split("-")[1]) > Number(game2.split("-")[0]))
+        );
+
+
 
       if (score && score.includes("-")) {
         const parts = score.split("-");
@@ -150,15 +162,29 @@ async function loadSets() {
           <div class="right-content">
             <div class="score-editable">
               <input type="number" inputmode="numeric"
+                ${isGame3Locked ? "disabled style='opacity:0.4;filter:blur(1px)'" : ""}
                 value="${a === 0 ? '' : a}" 
                 oninput="updateScore(${match.set}, ${i}, this)" 
                 onblur="this.blur()">
               <span class="score-separator">-</span>
               <input type="number" inputmode="numeric"
+                ${isGame3Locked ? "disabled style='opacity:0.4;filter:blur(1px)'" : ""}
+                value="${b === 0 ? '' : b}" 
+                oninput="updateScore(${match.set}, ${i}, this)" 
+                onblur="this.blur()">
                 value="${b === 0 ? '' : b}" 
                 oninput="updateScore(${match.set}, ${i}, this)" 
                 onblur="this.blur()">
             </div>
+
+            ${isGame3Locked ? `
+              <div style="text-align:right; margin-top:4px;">
+                <img src="unlock.png"
+                  onclick="unlockGame(${match.set}, ${i})"
+                  style="width:14px; opacity:0.7; cursor:pointer;">
+              </div>
+            ` : ""}
+
             <div class="meta-info">Game ${i+1} • Set ${match.set}</div>
             <div id="status-${match.set}-${i}"></div>
           </div>
@@ -173,6 +199,15 @@ async function loadSets() {
 
 }
 
+
+function unlockGame(set, gameIndex) {
+  const inputs = document.querySelectorAll(`[data-set="${set}"][data-game="${gameIndex}"] input`);
+  inputs.forEach(i => {
+    i.disabled = false;
+    i.style.opacity = 1;
+    i.style.filter = "none";
+  });
+}
 
 
 function toggleSet(el) {
@@ -202,10 +237,11 @@ function editScore(set, current) {
 
 function sendSMS(btn, date, col) {
   const input = btn.parentElement.querySelector("input");
-  const name = input.value;
+  const name = (input.value || "").trim();
+  if (!name) return alert("Enter a name first");
 
   const player = playersCache.find(p =>
-    p.name.toLowerCase() === name.toLowerCase()
+    p.name.toLowerCase().includes(name.toLowerCase())
   );
 
   if (!player || !player.phone) return alert("No phone");
@@ -220,9 +256,16 @@ function sendSMS(btn, date, col) {
 
   const msg = messages[Math.floor(Math.random()*messages.length)];
 
-  const link = `https://maxhydell.github.io/smsLinker/?to=${encodeURIComponent(player.phone)}&body=${encodeURIComponent(msg)}`;
+  const phone = player.phone.startsWith("+1")
+    ? player.phone
+    : "+1" + player.phone.replace(/\D/g, "");
 
-  window.open(link, "_blank");
+  const payload = `${phone}|${msg}`;
+
+
+  const link = `shortcuts://run-shortcut?name=SMS&input=text&text=${encodeURIComponent(payload)}`;
+
+  window.location.href = link;
 
   // auto mark as sent
   const check = btn.parentElement.querySelector(".check-btn");
@@ -230,12 +273,21 @@ function sendSMS(btn, date, col) {
   check.dataset.state = 1;
 
   callAPI({
-    action: "updatePlayerStatus",
+    action: "updateSchedule",
     date,
     col,
-    status: 1
+    name: el.innerText
+  }).then(() => {
+
+    // 🔥 if editing TODAY → reload sets instantly
+    const today = new Date().toDateString();
+    const selected = new Date(date).toDateString();
+
+    if (today === selected) {
+      loadSets(); // refresh sets immediately
+    }
+
   });
-}
 
 
 
@@ -416,7 +468,6 @@ async function loadSchedule() {
       <div class="day-card ${allConfirmed ? "day-complete" : ""}" data-date="${row.date}">
         <div class="day-header" onclick="toggleSet(this)">
           <div>
-            <div class="day-players">${players}</div>
             <div class="day-name">${dayName}</div>
           </div>
 
@@ -438,7 +489,7 @@ async function loadSchedule() {
                 <div class="player-slot">
                   <input class="player-input"
                     value="${row.players?.[col] ? capitalize(row.players[col]) : ""}"
-                    ${row.players?.[col] ? "disabled" : ""}
+                    ${status !== 0 ? "disabled" : ""}
                     ${status == 2 ? "disabled style='border:2px solid #00c853'" : ""}
                     onfocus="attachAutocomplete(this, '${row.date}', ${col+1})">
 
@@ -758,10 +809,13 @@ function toggleMenu() {
 let scoreTimeout;
 
 function attachAutocomplete(input, date, col) {
-  const dropdown = document.createElement("div");
-  dropdown.className = "autocomplete";
+  let dropdown = input.parentNode.querySelector(".autocomplete");
 
-  input.parentNode.appendChild(dropdown);
+  if (!dropdown) {
+    dropdown = document.createElement("div");
+    dropdown.className = "autocomplete";
+    input.parentNode.appendChild(dropdown);
+  }
 
   input.addEventListener("input", () => {
     const val = input.value.toLowerCase();
@@ -774,20 +828,25 @@ function attachAutocomplete(input, date, col) {
 
     dropdown.querySelectorAll(".auto-item").forEach(el => {
       el.onclick = () => {
-        if (input.value) return;
         input.value = el.innerText;
         dropdown.innerHTML = "";
-
-
 
         callAPI({
           action: "updateSchedule",
           date,
           col,
           name: el.innerText
+        }).then(() => {
+          loadSchedule();
+          loadSets();
         });
       };
     });
+  });
+
+  // 🔥 FIX: close dropdown on blur
+  input.addEventListener("blur", () => {
+    setTimeout(() => dropdown.innerHTML = "", 150);
   });
 }
 
@@ -868,7 +927,7 @@ function updateScore(set, gameIndex, input) {
     });
 
     showSuccess(`status-${set}-${gameIndex}`);
-  }, 500);
+  }, 1000);
 }
 
 
@@ -912,18 +971,24 @@ function renderDashboardAnalytics(history, player) {
   });
 
   document.getElementById("dashboardAnalytics").innerHTML = `
-    <div class="analytics-card green">🔥 Win %<br>${Math.round(avgWin*100)}%</div>
-    <div class="analytics-card blue">🎯 Avg Pts<br>${avgPoints.toFixed(1)}</div>
-    <div class="analytics-card yellow">🏆 Best Day<br>${best ? Math.round(best.winPct*100)+"%" : "--"}</div>
-    <div class="analytics-card red">📉 Win Streak<br>${streak}</div>
-    
-    <div class="analytics-card red">❌ Losing Streak<br>${maxLose}</div>
-    <div class="analytics-card blue">📅 Best Day<br>${bestDay}</div>
-    <div class="analytics-card green">⚡ Consistency<br>${getConsistency(history, player)}%</div>
-    <div class="analytics-card yellow">🎮 Games<br>${games.length}</div>
-  `;
-}
+    <div class="analytics-big">
 
+      <div class="analytics-title">Analytics</div>
+
+      <div class="analytics-grid-4">
+        <div class="stat green">Best Partner<br><b>Shayne</b></div>
+        <div class="stat blue">Win %<br><b>${Math.round(avgWin*100)}%</b></div>
+        <div class="stat yellow">Avg Points<br><b>${avgPoints.toFixed(1)}</b></div>
+        <div class="stat purple">Win Streak<br><b>${streak}</b></div>
+
+        <div class="stat red">Hardest Opponent<br><b>James</b></div>
+        <div class="stat teal">Best Day<br><b>${bestDay}</b></div>
+        <div class="stat orange">Losing Streak<br><b>${maxLose}</b></div>
+        <div class="stat gray">Games<br><b>${games.length}</b></div>
+      </div>
+
+    </div>
+  `;
 
 
 
@@ -934,7 +999,7 @@ function navigate(page) {
 window.onload = async () => {
   try {
     // 🔥 LOAD SETS FIRST (critical)
-    await loadSets();
+    loadSets();
 
     // 🔥 HIDE LOADING IMMEDIATELY AFTER SETS
     const loading = document.getElementById("loading-screen");
