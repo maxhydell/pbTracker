@@ -1,4 +1,4 @@
-const API_URL = "https://script.google.com/macros/s/AKfycbwOujlf9US-wllY8MzMiiTFMVnJBRol7eCIqfvmChEK0RO-pw5_5Oq4RsRmOu6jhKyc/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbxz_N8zBeij_KoP_wPpzA4xnX-jhTji8DVry5gDi3UkeklxNLyR_avTbxpzst7Suizp/exec";
 
 function log(label, data) {
   console.log("🔥", label, data);
@@ -172,9 +172,6 @@ async function loadSets() {
                 value="${b === 0 ? '' : b}" 
                 oninput="updateScore(${match.set}, ${i}, this)" 
                 onblur="this.blur()">
-                value="${b === 0 ? '' : b}" 
-                oninput="updateScore(${match.set}, ${i}, this)" 
-                onblur="this.blur()">
             </div>
 
             ${isGame3Locked ? `
@@ -276,7 +273,7 @@ function sendSMS(btn, date, col) {
     action: "updateSchedule",
     date,
     col,
-    name: el.innerText
+    status: 1
   }).then(() => {
 
     // 🔥 if editing TODAY → reload sets instantly
@@ -288,6 +285,7 @@ function sendSMS(btn, date, col) {
     }
 
   });
+}
 
 
 
@@ -989,6 +987,7 @@ function renderDashboardAnalytics(history, player) {
 
     </div>
   `;
+  }
 
 
 
