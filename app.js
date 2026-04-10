@@ -1,4 +1,4 @@
-const API_URL = "https://script.google.com/macros/s/AKfycbxz_N8zBeij_KoP_wPpzA4xnX-jhTji8DVry5gDi3UkeklxNLyR_avTbxpzst7Suizp/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbxp_e1YMymTZoY421Yq8YwMBFXmBh3HERKABIfyLOjrmypQx3aNnftJzFbqPBwH21c/exec";
 
 function log(label, data) {
   console.log("🔥", label, data);
@@ -31,6 +31,7 @@ document.addEventListener("touchend", () => {
 
 
 let playersCache = [];
+let historyCache = []; // 🔥 ADD THIS
 
 async function loadPlayers() {
   playersCache = await callAPI({ action: "getPlayers" });
@@ -148,7 +149,7 @@ async function loadSets() {
 
       // Match Card structured like the screenshot
       const matchCard = `
-        <div class="match-card">
+        <div class="match-card ${isGame3Locked ? "locked" : ""}">
           <div class="left-content">
             <div class="team-row">
               <span class="team-names">${formatNames(match.teamA)}</span>
@@ -162,13 +163,13 @@ async function loadSets() {
           <div class="right-content">
             <div class="score-editable">
               <input type="number" inputmode="numeric"
-                ${isGame3Locked ? "disabled style='opacity:0.4;filter:blur(1px)'" : ""}
+                ${isGame3Locked ? "disabled" : ""}
                 value="${a === 0 ? '' : a}" 
                 oninput="updateScore(${match.set}, ${i}, this)" 
                 onblur="this.blur()">
               <span class="score-separator">-</span>
               <input type="number" inputmode="numeric"
-                ${isGame3Locked ? "disabled style='opacity:0.4;filter:blur(1px)'" : ""}
+                ${isGame3Locked ? "disabled" : ""}
                 value="${b === 0 ? '' : b}" 
                 oninput="updateScore(${match.set}, ${i}, this)" 
                 onblur="this.blur()">
@@ -209,12 +210,26 @@ function unlockGame(set, gameIndex) {
 
 function toggleSet(el) {
   const body = el.nextElementSibling;
+  const card = el.closest(".day-card");
 
-  el.classList.toggle("active");
+  const isOpen = body.classList.contains("open");
 
-  const isOpen = body.style.display === "block";
+  // close all
+  document.querySelectorAll(".day-body").forEach(b => {
+    b.style.maxHeight = null;
+    b.classList.remove("open");
+  });
 
-  body.style.display = isOpen ? "none" : "block";
+  document.querySelectorAll(".day-card").forEach(c => {
+    c.classList.remove("expanded");
+  });
+
+  if (!isOpen) {
+    body.classList.add("open");
+    card.classList.add("expanded");
+
+    body.style.maxHeight = body.scrollHeight + "px";
+  }
 }
 
 
@@ -324,9 +339,10 @@ function toggleCheck(btn, date, col) {
       date,
       col,
       status: 1
+    }).then(() => {
+      loadSchedule(); // 🔥 FORCE REFRESH FROM SERVER
     });
-
-    return;
+    return; // 🔥 IMPORTANT
   }
 
   if (state === 1) {
@@ -341,6 +357,8 @@ function toggleCheck(btn, date, col) {
       date,
       col,
       status: 2
+    }).then(() => {
+      loadSchedule(); // 🔥 FORCE REFRESH FROM SERVER
     });
 
     setTimeout(() => {
@@ -452,7 +470,7 @@ async function loadSchedule() {
 
     if (!data.length) {
       container.innerHTML = "No schedule found";
-      return;
+      return "";
     }
 
     const players = row.players
@@ -465,9 +483,7 @@ async function loadSchedule() {
     return `
       <div class="day-card ${allConfirmed ? "day-complete" : ""}" data-date="${row.date}">
         <div class="day-header" onclick="toggleSet(this)">
-          <div>
-            <div class="day-name">${dayName}</div>
-          </div>
+          <div class="day-name">${dayName}</div>
 
           ${i === topDayIndex ? `<div class="tag">Top Day</div>` : ""}
 
@@ -488,7 +504,7 @@ async function loadSchedule() {
                   <input class="player-input"
                     value="${row.players?.[col] ? capitalize(row.players[col]) : ""}"
                     ${status !== 0 ? "disabled" : ""}
-                    ${status == 2 ? "disabled style='border:2px solid #00c853'" : ""}
+                    ${status == 2 ? `style="border:2px solid #00c853"` : ""}
                     onfocus="attachAutocomplete(this, '${row.date}', ${col+1})">
 
                   ${status == 2 ? `
@@ -507,7 +523,8 @@ async function loadSchedule() {
             }).join("")}
           </div>
         </div>
-      `;
+      </div>
+    `;
   }).join("");
 }
 
@@ -586,28 +603,27 @@ async function loadRankings() {
 
   // BIG STAT
   document.getElementById("bigStat").innerText =
-    Math.round(player.winPct * 100) + "%";
+    Math.round(player.winPct * 100).toFixed(1) + "%";
 
 
   //analytics
 
-  const history = await callAPI({ action: "getHistory" });
+  if (!historyCache.length) {
+    historyCache = await callAPI({ action: "getHistory" });
+  }
+  const history = historyCache;
   renderDashboardAnalytics(history, selectedPlayer);
 
   const streak = getWinStreak(history, selectedPlayer);
   const best = getBestDay(history, selectedPlayer);
   const consistency = getConsistency(history, selectedPlayer);
 
-  document.getElementById("analytics").innerHTML = `
-    <div>🔥 Streak: ${streak}</div>
-    <div>🏆 Best: ${best ? Math.round(best.winPct*100)+"%" : "--"}</div>
-    <div>📊 Consistency: ${consistency}%</div>
-  `;
+
 
 
 
   // RANK
-  const rank = data.findIndex(p => p.name === player.name) + 1;
+  const rank = sorted.findIndex(p => p.name === player.name) + 1;
   document.getElementById("topPercent").innerText =
     `#${rank} Place`;
 
@@ -671,7 +687,7 @@ chart = new Chart(document.getElementById("chart"), {
     p.winPct > 0 || p.pointsAvg > 0
   );
 
-  renderLeaderboard(sorted);
+  renderLeaderboard(filtered);
   }
 
 
@@ -734,6 +750,7 @@ function renderLeaderboard(data) {
 }
 
 async function getHistory() {
+  historyCache = []; // 🔥 force refresh next time
   return await callAPI({ action: "getHistory" });
 }
 
@@ -835,8 +852,8 @@ function attachAutocomplete(input, date, col) {
           col,
           name: el.innerText
         }).then(() => {
+          loadSets();          
           loadSchedule();
-          loadSets();
         });
       };
     });
@@ -934,27 +951,24 @@ function renderDashboardAnalytics(history, player) {
   const games = history.filter(p => p.name.toLowerCase() === player);
   if (!games.length) return;
 
-  const avgWin = games.reduce((a,b)=>a+b.winPct,0)/games.length;
+  const avgWin = (games.reduce((a,b)=>a+b.winPct,0)/games.length)*100;
   const avgPoints = games.reduce((a,b)=>a+b.pointsAvg,0)/games.length;
 
-  const best = getBestDay(history, player);
   const streak = getWinStreak(history, player);
 
-  // longest losing streak
+  // losing streak
   let loseStreak = 0, maxLose = 0;
   games.forEach(g => {
     if (g.winPct < 0.5) {
       loseStreak++;
       maxLose = Math.max(maxLose, loseStreak);
-    } else {
-      loseStreak = 0;
-    }
+    } else loseStreak = 0;
   });
 
-  // best day of week
+  // best day
   const days = {};
   games.forEach(g => {
-    const d = new Date(g.date).toLocaleDateString("en-US",{weekday:"short"});
+    const d = new Date(g.date).toLocaleDateString("en-US",{weekday:"long"});
     if (!days[d]) days[d] = [];
     days[d].push(g.winPct);
   });
@@ -968,26 +982,139 @@ function renderDashboardAnalytics(history, player) {
     }
   });
 
-  document.getElementById("dashboardAnalytics").innerHTML = `
-    <div class="analytics-big">
+  const html = `
+    <div class="analytics-main">
 
       <div class="analytics-title">Analytics</div>
 
-      <div class="analytics-grid-4">
-        <div class="stat green">Best Partner<br><b>Shayne</b></div>
-        <div class="stat blue">Win %<br><b>${Math.round(avgWin*100)}%</b></div>
-        <div class="stat yellow">Avg Points<br><b>${avgPoints.toFixed(1)}</b></div>
-        <div class="stat purple">Win Streak<br><b>${streak}</b></div>
+      <select id="dashPlayerSelect" onchange="changeDashboardPlayer(this.value)">
+        ${playersCache.map(p =>
+          `<option value="${p.name.toLowerCase()}" ${p.name.toLowerCase()===player?"selected":""}>
+            ${capitalize(p.name)}
+          </option>`
+        ).join("")}
+      </select>
 
-        <div class="stat red">Hardest Opponent<br><b>James</b></div>
-        <div class="stat teal">Best Day<br><b>${bestDay}</b></div>
-        <div class="stat orange">Losing Streak<br><b>${maxLose}</b></div>
-        <div class="stat gray">Games<br><b>${games.length}</b></div>
+      <div class="analytics-grid-big">
+
+        <div class="stat green">
+          <div class="stat-title">Best Partner</div>
+          <div class="stat-value">Shayne</div>
+        </div>
+
+        <div class="stat blue">
+          <div class="stat-title">Win %</div>
+          <div class="stat-value">${avgWin.toFixed(1)}%</div>
+        </div>
+
+        <div class="stat yellow">
+          <div class="stat-title">Avg Points</div>
+          <div class="stat-value">${avgPoints.toFixed(1)}</div>
+        </div>
+
+        <div class="stat purple">
+          <div class="stat-title">Win Streak</div>
+          <div class="stat-value">${streak}</div>
+        </div>
+
+        <div class="stat red">
+          <div class="stat-title">Hardest Opponent</div>
+          <div class="stat-value">James</div>
+        </div>
+
+        <div class="stat teal">
+          <div class="stat-title">Best Day</div>
+          <div class="stat-value">${bestDay}</div>
+        </div>
+
+        <div class="stat orange">
+          <div class="stat-title">Losing Streak</div>
+          <div class="stat-value">${maxLose}</div>
+        </div>
+
+        <div class="stat gray">
+          <div class="stat-title">Games Played</div>
+          <div class="stat-value">${games.length}</div>
+        </div>
+
       </div>
-
     </div>
   `;
+  const dashboard = document.getElementById("dashboardAnalytics");
+  const rankings = document.getElementById("rankingsAnalytics");
+
+  if (dashboard) dashboard.innerHTML = html;
+  if (rankings) rankings.innerHTML = html;
+}
+
+function changeDashboardPlayer(name) {
+  renderDashboardAnalytics(historyCache, name);
+}
+
+
+
+
+
+
+document.addEventListener("DOMContentLoaded", () => {
+
+  const isNewUser = !localStorage.getItem("seenOnboarding");
+
+  if (isNewUser) {
+    document.getElementById("onboarding").style.display = "flex";
+    document.querySelector(".app").style.display = "none";
+
+    loadOnboardingData();
+  } else {
+    document.getElementById("onboarding").style.display = "none";
   }
+
+});
+
+function enterApp() {
+  localStorage.setItem("seenOnboarding", "true");
+
+  document.getElementById("onboarding").style.display = "none";
+  document.querySelector(".app").style.display = "block";
+}
+function enterApp() {
+  localStorage.setItem("seenOnboarding", "true");
+
+  document.getElementById("onboarding").style.display = "none";
+  document.querySelector(".app").style.display = "block";
+}
+async function loadOnboardingData() {
+  const rankings = await callAPI({ action: "getUserTrend" });
+
+  if (!rankings) return;
+
+  const top = [...rankings]
+    .sort((a,b) => b.winPct - a.winPct)
+    .slice(0, 5);
+
+  document.getElementById("onboardLeaderboard").innerHTML = `
+    <div class="analytics-main">
+      <div class="analytics-title">Top Players</div>
+      ${top.map((p,i)=>`
+        <div>${i+1}. ${capitalize(p.name)} - ${Math.round(p.winPct*100)}%</div>
+      `).join("")}
+    </div>
+  `;
+
+  // simple analytics preview
+  document.getElementById("onboardAnalytics").innerHTML = `
+    <div class="analytics-main">
+      <div class="analytics-title">App Features</div>
+      <div>📊 Live Rankings</div>
+      <div>📅 Smart Scheduling</div>
+      <div>🏆 Match Tracking</div>
+      <div>📈 Player Analytics</div>
+    </div>
+  `;
+}
+
+
+
 
 
 
@@ -995,27 +1122,31 @@ function navigate(page) {
   showPage(page);
 }
 
-window.onload = async () => {
+document.addEventListener("DOMContentLoaded", async () => {
   try {
-    // 🔥 LOAD SETS FIRST (critical)
-    loadSets();
 
     // 🔥 HIDE LOADING IMMEDIATELY AFTER SETS
-    const loading = document.getElementById("loading-screen");
-    if (loading) {
-      loading.style.opacity = "0";
-      setTimeout(() => loading.style.display = "none", 300);
-    }
+    loadSets().then(() => {
+      const loading = document.getElementById("loading-screen");
+      if (loading) {
+        loading.style.opacity = "0";
+        setTimeout(() => loading.style.display = "none", 300);
+      }
+    });
 
     // 🚀 LOAD EVERYTHING ELSE IN BACKGROUND
-    loadPlayers();
-    loadRankings();
-    loadSchedule();
+    Promise.all([
+      loadPlayers(),
+      loadRankings(),
+      loadSchedule()
+    ]);
 
-    callAPI({ action: "getHistory" })
-      .then(history => renderDashboardAnalytics(history, selectedPlayer));
+    setTimeout(async () => {
+      const history = await callAPI({ action: "getHistory" });
+      renderDashboardAnalytics(history, selectedPlayer);
+    }, 300);
 
   } catch (err) {
     console.error("LOAD FAILED", err);
   }
-};
+});

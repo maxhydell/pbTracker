@@ -28,7 +28,7 @@ h1, h2 {
   border-bottom: 2px solid #aaa;
   transform: rotate(45deg);
   transition: transform 0.2s ease;
-  margin-left: 10px;
+  margin-left: auto;
 }
 
 .set-header.active .carrot,
@@ -277,18 +277,54 @@ h1, h2 {
 }
 
 
+/*locked*/ 
+.match-card.locked {
+  position: relative;
+  filter: blur(2px);
+  opacity: 0.7;
+}
+
+.match-card.locked::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(0,0,0,0.4);
+  border-radius: 12px;
+}
+
+
 /* schedule */
 .day-card {
   background: #1a1614;
-  border-radius: 16px;
-  margin-bottom: 12px;
+  border-radius: 18px;
+  margin: 18px 0;
+  overflow: hidden;
+
+  box-shadow: 0 10px 25px rgba(0,0,0,0.5);
 }
 
 .day-header {
   display: flex;
+  position: relative;
   justify-content: space-between;
   align-items: center;
-  padding: 10px 14px; /* smaller height */
+  padding: 18px 16px;
+
+  border-radius: 18px; /* 🔥 makes each feel like its own card */
+  min-height: 30px; /* 🔥 forces consistent height */
+  max-height: 45px;
+  gap: 10px;
+}
+
+#scheduleList {
+  display: block;
+  flex-direction: column;
+  gap: 18px; /* 🔥 THIS is what actually separates them cleanly */
+}
+
+.day-card.expanded .day-body {
+  padding-bottom: 18px; /* 🔥 adds that “extra bottom space” feel */
+  box-shadow: 0 14px 35px rgba(0,0,0,0.6);
 }
 
 /* NEW */
@@ -305,10 +341,10 @@ h1, h2 {
 }
 
 .day-body {
-  display: none;
-  padding: 12px;
-  transition: all 0.2s ease;
+  max-height: 0;
   overflow: hidden;
+  padding: 0 12px; /* keep horizontal only */
+  transition: max-height 0.35s ease, padding 0.25s ease;
 }
 
 
@@ -321,10 +357,53 @@ h1, h2 {
   cursor: pointer;
 }
 
+
+@keyframes glowPulse {
+  0% {
+    box-shadow: 0 0 6px rgba(0,200,83,0.3);
+  }
+  50% {
+    box-shadow: 0 0 16px rgba(0,200,83,0.7);
+  }
+  100% {
+    box-shadow: 0 0 6px rgba(0,200,83,0.3);
+  }
+}
+
+.day-header:active .tag {
+  transform: translateY(-50%) scale(0.95);
+  animation: glowPulse 1.5s ease-in-out infinite;
+}
+
+@keyframes softBlackGlow {
+  0%   { box-shadow: 0 0 6px rgba(0,0,0,0.6); }
+  50%  { box-shadow: 0 0 12px rgba(0,0,0,1); }
+  100% { box-shadow: 0 0 6px rgba(0,0,0,0.6); }
+}
+
 .tag {
-  background: #00c853;
-  padding: 4px 8px;
-  border-radius: 6px;
+  animation: softBlackGlow 3s ease-in-out infinite;
+}
+
+.tag {
+  position: static;
+
+  background: #000000;
+  color: #1f862c;
+
+  padding: 10px 13px; /* 🔥 MORE SPACE around text */
+  border-radius: 8px;
+
+  font-size: 11px;
+  font-weight: 800;
+
+  line-height: 1; /* 🔥 fixes vertical centering */
+
+  box-shadow: 0 0 14px rgba(0,0,0,0.95);
+
+  white-space: nowrap;
+  transform: translateY(2px);
+  margin-left: 220px; /* 🔥 nudges it right slightly */
 }
 
 .autocomplete {
@@ -781,12 +860,28 @@ button:active {
   gap: 10px;
   margin-bottom: 20px;
 }
-
+.analytics-title {
+  font-size: 18px;
+  margin-bottom: 10px;
+}
+.analytics-main {
+  background: rgba(20,20,20,0.9);
+  padding: 15px;
+  border-radius: 16px;
+  margin-bottom: 20px;
+}
 .analytics-card {
   background: rgba(20,20,20,0.9);
   padding: 12px;
   border-radius: 12px;
   font-size: 13px;
+} 
+
+.analytics-grid-big {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+}
 
 .analytics-big {
   background: rgba(20,20,20,0.9);
@@ -802,10 +897,19 @@ button:active {
 }
 
 .stat {
-  font-size: 12px;
   padding: 10px;
   border-radius: 10px;
+  font-size: 12px;
 }
+.stat-value {
+  font-size: 16px;
+  font-weight: 700;
+}
+.stat-title {
+  color: #aaa;
+  font-size: 11px;
+}
+
 
 .stat.green { border-left: 4px solid #00c853; }
 .stat.blue { border-left: 4px solid #2196f3; }
@@ -816,9 +920,48 @@ button:active {
 .stat.orange { border-left: 4px solid #ff9800; }
 .stat.gray { border-left: 4px solid #aaa; }
 
-}
-
 .analytics-card.green { border-left: 4px solid #00c853; }
 .analytics-card.red { border-left: 4px solid #ff3b30; }
 .analytics-card.blue { border-left: 4px solid #0a84ff; }
 .analytics-card.yellow { border-left: 4px solid #ffd60a; }
+
+
+
+
+
+/* ONBOARD */
+.onboarding {
+  position: fixed;
+  inset: 0;
+  background: radial-gradient(circle at top, #0a1a2f, #000);
+  z-index: 10000;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.onboard-content {
+  width: 90%;
+  max-width: 400px;
+  text-align: center;
+}
+
+.onboard-title {
+  font-size: 28px;
+  font-weight: 800;
+}
+
+.onboard-sub {
+  color: #aaa;
+  margin-bottom: 20px;
+}
+
+.install-btn {
+  background: #00c853;
+  margin-top: 15px;
+}
+
+.enter-btn {
+  background: transparent;
+  border: 1px solid #555;
+}
