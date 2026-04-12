@@ -1551,7 +1551,7 @@ async function renderDashboardAnalytics(player) {
         </div>
 
         <div class="stat purple">
-          <div class="stat-title">Win Streak</div>
+          <div class="stat-title">Longest Win Streak</div>
           <div class="stat-value">${deep.winStreak}</div>
         </div>
 
