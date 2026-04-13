@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>pbTracker redirect</title>
+  <script>
+    (function () {
+      var path = window.location.pathname || "";
+      var match = path.toLowerCase().match(/\/pbtracker\/(rankings|schedule|sets)\//);
+      var route = match ? match[1] : "input";
+      var query = window.location.search || "";
+      var hash = window.location.hash || "";
+      var joiner = query ? "&" : "?";
+      window.location.replace("/pbTracker/" + query + joiner + "route=" + encodeURIComponent(route) + hash);
+    })();
+  </script>
+</head>
+<body></body>
+</html>

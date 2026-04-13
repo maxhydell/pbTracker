@@ -65,11 +65,26 @@ const LS_PLAYER_PREF = "pbTracker_playerPref_v1";
 const LS_MORNING_WINPCT = "pbTracker_morningWinPct";
 const LS_SCHEDULE_WEEK_ANCHOR = "pbTracker_scheduleWeekAnchor_v1";
 
+
+function getRoutePage() {
+  const path = window.location.pathname.toLowerCase();
+  const routeParam = new URLSearchParams(window.location.search).get("route");
+  if (["input", "rankings", "schedule", "sets"].includes(String(routeParam || "").toLowerCase())) {
+    return String(routeParam).toLowerCase();
+  }
+
+  if (path.includes("/rankings")) return "rankings";
+  if (path.includes("/schedule")) return "schedule";
+  if (path.includes("/sets")) return "sets";
+
+  return "input";
+}
+
 (function handleResetQuery() {
   const q = new URLSearchParams(window.location.search);
   if (q.get("reset") === null) return;
   localStorage.removeItem("player");
-  localStorage.removeItem(LS_PLAYER_PREF);
+  localStorage.removeItem("pbTracker_playerPref_v1");
   localStorage.removeItem(LS_SCHEDULE_WEEK_ANCHOR);
   const clean = window.location.pathname + (window.location.hash || "");
   window.location.replace(clean);
@@ -84,15 +99,7 @@ function getSiteBasePath() {
 }
 
 function getInitialPageFromPath() {
-  const last = (window.location.pathname || "")
-    .replace(/\/+$/, "")
-    .split("/")
-    .filter(Boolean)
-    .pop();
-  if (last === "rankings") return "rankings";
-  if (last === "schedule") return "schedule";
-  if (last === "sets") return "sets";
-  return "input";
+  return getRoutePage();
 }
 
 function buildHrefForPage(pageId) {
@@ -791,8 +798,15 @@ async function loadSchedule() {
 
   if (!data.length) {
     console.warn("⚠️ No schedule for this week");
-    container.innerHTML = "No games scheduled this week";
-    return;
+    data = Array.from({ length: 5 }, (_, i) => {
+      const d = new Date(weekStart);
+      d.setDate(weekStart.getDate() + i);
+      return {
+        date: d.toISOString(),
+        players: ["", "", "", ""],
+        status: [0, 0, 0, 0]
+      };
+    });
   }
 
   let topDayIndex = -1;
@@ -2236,6 +2250,12 @@ async function renderDashboardAnalytics(player) {
   ) || 0;
 
   const dropdownSorted = sortPlayersForDropdown(trend);
+  lastModalBuildStats = buildPlayerStats(allSets);
+  lastModalPlayerKey = pl;
+  lastModalDeep = deep;
+  lastModalWinPctStr = winPctStr;
+  lastModalAvgPointsStr = avgPointsSafe.toFixed(2);
+  lastModalGamesPlayed = gamesPlayed;
 
   const html = `
     <div class="analytics-main">
@@ -2253,37 +2273,42 @@ async function renderDashboardAnalytics(player) {
 
       <div class="analytics-grid-big">
 
-        <div class="stat green">
+        <div class="stat green" role="button" tabindex="0" onclick="handleAnalyticsStatClick('bestPartner')">
           <div class="stat-title">Best Partner</div>
           <div class="stat-value">${statLabelName(deep.bestPartner)}</div>
         </div>
 
-        <div class="stat blue">
+        <div class="stat blue" role="button" tabindex="0" onclick="handleAnalyticsStatClick('winPct')">
           <div class="stat-title">Win %</div>
           <div class="stat-value">${winPctStr}</div>
         </div>
 
-        <div class="stat yellow">
+        <div class="stat yellow" role="button" tabindex="0" onclick="handleAnalyticsStatClick('avgPoints')">
           <div class="stat-title">Avg Points</div>
           <div class="stat-value">${avgPointsSafe.toFixed(2)}</div>
         </div>
 
-        <div class="stat purple">
+        <div class="stat purple" role="button" tabindex="0" onclick="handleAnalyticsStatClick('winStreak')">
           <div class="stat-title">Longest Win Streak</div>
           <div class="stat-value">${deep.winStreak}</div>
         </div>
 
-        <div class="stat red">
+        <div class="stat teal" role="button" tabindex="0" onclick="handleAnalyticsStatClick('bestDay')">
+          <div class="stat-title">Best Day</div>
+          <div class="stat-value">${deep.bestWeekdayLabel}</div>
+        </div>
+
+        <div class="stat red" role="button" tabindex="0" onclick="handleAnalyticsStatClick('hardest')">
           <div class="stat-title">Hardest Opponent</div>
           <div class="stat-value">${statLabelName(deep.hardestOpponent)}</div>
         </div>
 
-        <div class="stat orange">
+        <div class="stat orange" role="button" tabindex="0" onclick="handleAnalyticsStatClick('loseStreak')">
           <div class="stat-title">Losing Streak</div>
           <div class="stat-value">${deep.loseStreak}</div>
         </div>
 
-        <div class="stat gray">
+        <div class="stat gray" role="button" tabindex="0" onclick="handleAnalyticsStatClick('games')">
           <div class="stat-title">Games Played</div>
           <div class="stat-value">${gamesPlayed}</div>
         </div>
@@ -2394,19 +2419,43 @@ function attachOnboardAutocomplete(input) {
 }
 
 function navigate(page) {
+  const base = "/pbTracker";
+  const params = new URLSearchParams(window.location.search);
+  const player = params.get("p");
+
+  let path = page === "input" ? `${base}/` : `${base}/${page}/`;
+  if (player) {
+    path += `share/?p=${encodeURIComponent(player)}`;
+  }
+
+  window.history.pushState({}, "", path);
   showPage(page);
 }
 
+function goTo(page) {
+  const params = new URLSearchParams(window.location.search);
+  const player = params.get("p");
+  const suffix = player ? `?p=${encodeURIComponent(player)}` : "";
+  window.location.href = `/pbTracker/${page}/share/${suffix}`;
+}
+
+window.addEventListener("popstate", () => {
+  showPage(getRoutePage());
+});
+
 (async () => {
   try {
-    // 🔥 1. INSTANT UI (no waiting)
+    // 🔥 1. use clean URL routing
+    showPage(getRoutePage());
+
+    // 🔥 2. instant UI
     loadTodaySetsAll();
     loadRankings();
 
-    // 🔥 2. LOAD DATA IN BACKGROUND
+    // 🔥 3. load data
     await loadAllData(true);
 
-    // 🔥 3. RE-RENDER WITH REAL DATA
+    // 🔥 4. re-render
     loadTodaySetsAll();
     loadRankings();
 
@@ -2457,10 +2506,6 @@ window.addEventListener("load", () => {
     }, 400);
   }
 });
-
-function navigate(id) {
-  showPage(id);
-}
 
 preloadData();
 

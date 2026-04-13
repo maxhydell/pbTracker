@@ -5,7 +5,10 @@
 body {
   margin: 0;
   font-family: 'League Spartan', sans-serif;
-  background: radial-gradient(circle at top, #0a1a2f, #000);
+  background:
+    radial-gradient(1200px 480px at 15% -10%, rgba(58, 108, 244, 0.28), transparent 58%),
+    radial-gradient(900px 380px at 85% 0%, rgba(0, 200, 160, 0.2), transparent 55%),
+    linear-gradient(180deg, #07101f 0%, #070b16 100%);
   color: white;
   overflow-y: auto;
 }
@@ -133,15 +136,11 @@ h1, h2 {
 }
 
 .analytics-card-outer {
-  width: calc(100vw - 40px);
-  max-width: calc(100vw - 24px);
-  margin-left: calc(50% - 50vw + 25px);
-  margin-right: calc(50% - 50vw + 22px);
-  margin-top: 12px;
-  transform: translateX(-6px);
+  width: 100%;
+  max-width: 100%;
+  margin: 12px auto 0;
   box-sizing: border-box;
-  padding-left: 12px;
-  padding-right: 12px;
+  padding: 0;
 }
 
 .revert-day-btn {
@@ -1066,13 +1065,11 @@ select.dash-player-select option,
 }
 
 .analytics-main {
-  background: rgba(20,20,20,0.9);
-  margin-left: calc(50% - 50vw + 25px);
-  margin-right: calc(50% - 50vw + 22px);
+  background: rgba(12, 18, 32, 0.9);
+  border: 1px solid rgba(120, 153, 255, 0.16);
+  margin: 14px auto 20px;
   padding: 15px;
   border-radius: 16px;
-  margin-bottom: 20px;
-  margin-top: 20px;
 }
 .analytics-main,
 .analytics-card {
@@ -1088,8 +1085,8 @@ select.dash-player-select option,
 .analytics-grid-big {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
-  gap: 56px; /* bigger spacing */
-  row-gap: 14px; 
+  gap: 12px;
+  row-gap: 12px; 
 }
 
 .analytics-big {
@@ -1111,6 +1108,7 @@ select.dash-player-select option,
 }
 
 .stat {
+  cursor: pointer;
   padding: 16px;
   border-radius: 14px;
   font-size: 13px;
@@ -1129,6 +1127,11 @@ select.dash-player-select option,
 .stat-title {
   font-size: 12px;
   margin-top: 4px;
+}
+
+.stat:hover {
+  transform: translateY(-1px);
+  background: rgba(255,255,255,0.06);
 }
 
 
