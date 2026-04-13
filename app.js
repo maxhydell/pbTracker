@@ -1,11 +1,4 @@
 const API_URL = "https://script.google.com/macros/s/AKfycbwyxeNQ2cG9nOtFjlUOkUI6rfnKFDdUUPjG3kCYZOvPm38s7M2Mg2NiGdoVy6eoFCp7/exec";
-const params = new URLSearchParams(window.location.search);
-
-if (params.get("reset") !== null) {
-  localStorage.removeItem("player");
-  localStorage.removeItem(LS_PLAYER_PREF);
-  location.href = window.location.pathname; // clean URL
-}
 
 function log(label, data) {
   console.log("🔥", label, data);
@@ -70,6 +63,49 @@ let lastTodaySetsData = null;
 const LS_DAY_COMPLETE = "pbTracker_dayComplete";
 const LS_PLAYER_PREF = "pbTracker_playerPref_v1";
 const LS_MORNING_WINPCT = "pbTracker_morningWinPct";
+const LS_SCHEDULE_WEEK_ANCHOR = "pbTracker_scheduleWeekAnchor_v1";
+
+(function handleResetQuery() {
+  const q = new URLSearchParams(window.location.search);
+  if (q.get("reset") === null) return;
+  localStorage.removeItem("player");
+  localStorage.removeItem(LS_PLAYER_PREF);
+  localStorage.removeItem(LS_SCHEDULE_WEEK_ANCHOR);
+  const clean = window.location.pathname + (window.location.hash || "");
+  window.location.replace(clean);
+})();
+
+function getSiteBasePath() {
+  const path = (window.location.pathname || "").replace(/\/+$/, "");
+  const parts = path.split("/").filter(Boolean);
+  const subs = new Set(["rankings", "schedule", "sets", "share"]);
+  if (parts.length && subs.has(parts[parts.length - 1])) parts.pop();
+  return parts.length ? `/${parts.join("/")}/` : "/";
+}
+
+function getInitialPageFromPath() {
+  const last = (window.location.pathname || "")
+    .replace(/\/+$/, "")
+    .split("/")
+    .filter(Boolean)
+    .pop();
+  if (last === "rankings") return "rankings";
+  if (last === "schedule") return "schedule";
+  if (last === "sets") return "sets";
+  return "input";
+}
+
+function buildHrefForPage(pageId) {
+  const base = getSiteBasePath();
+  const q = window.location.search || "";
+  if (pageId === "input") return base + q;
+  const map = {
+    rankings: "rankings/",
+    schedule: "schedule/",
+    sets: "sets/"
+  };
+  return base + (map[pageId] || "") + q;
+}
 
 function getAllData() {
   return {
@@ -651,21 +687,67 @@ async function submitNewPlayer() {
 }
 
 
-function isNewWeek() {
-  const today = new Date();
-  return today.getDay() === 6; // Saturday
+function isWeekend() {
+  const d = new Date().getDay();
+  return d === 0 || d === 6;
+}
+
+function startOfDay(d) {
+  const x = new Date(d);
+  x.setHours(0, 0, 0, 0);
+  return x;
+}
+
+function mondayOfWeekContaining(date = new Date()) {
+  const today = startOfDay(date);
+  const day = today.getDay();
+  const diffToMonday = day === 0 ? -6 : 1 - day;
+  const monday = new Date(today);
+  monday.setDate(today.getDate() + diffToMonday);
+  return monday;
+}
+
+function nextMondayAfterWeekend(date = new Date()) {
+  const today = startOfDay(date);
+  const day = today.getDay();
+  if (day === 6) {
+    const m = new Date(today);
+    m.setDate(today.getDate() + 2);
+    return m;
+  }
+  if (day === 0) {
+    const m = new Date(today);
+    m.setDate(today.getDate() + 1);
+    return m;
+  }
+  return mondayOfWeekContaining(date);
+}
+
+function effectiveScheduleWeekMonday() {
+  return isWeekend() ? nextMondayAfterWeekend() : mondayOfWeekContaining();
+}
+
+function maybeRollScheduleLocalWeek() {
+  const mon = effectiveScheduleWeekMonday();
+  const anchorKey = mon.toISOString().slice(0, 10);
+  const prev = localStorage.getItem(LS_SCHEDULE_WEEK_ANCHOR);
+  if (isWeekend() && prev && prev !== anchorKey) {
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith("pbTracker_schedule_")) localStorage.removeItem(k);
+    }
+  }
+  localStorage.setItem(LS_SCHEDULE_WEEK_ANCHOR, anchorKey);
 }
 
 async function loadSchedule() {
   startTimer("Schedule");
   setWeekRange();
+  maybeRollScheduleLocalWeek();
   console.log("🚀 loadSchedule called");
-  if (isNewWeek()) {
-    await callAPI({ action: "resetWeek" });
-  }
 
   if (!globalData.schedule) await loadAllData();
-  const data = globalData.schedule;
+  let data = globalData.schedule;
   console.log("📦 schedule data:", data);
 
   if (!data || !Array.isArray(data)) {
@@ -674,6 +756,11 @@ async function loadSchedule() {
     return;
   }
 
+  const weekStart = startOfDay(effectiveScheduleWeekMonday());
+  data = data.filter(row => {
+    const rd = startOfDay(new Date(row.date));
+    return !isNaN(rd.getTime()) && rd.getTime() >= weekStart.getTime();
+  });
 
   console.log("📊 SCHEDULE LENGTH:", data.length);
 
@@ -1420,14 +1507,7 @@ function attachAutocomplete(input, date, col) {
 
 
 function setWeekRange() {
-  const today = new Date();
-
-  const day = today.getDay();
-  const diffToMonday = (day === 0 ? -6 : 1 - day);
-
-  const monday = new Date(today);
-  monday.setDate(today.getDate() + diffToMonday);
-
+  const monday = effectiveScheduleWeekMonday();
   const friday = new Date(monday);
   friday.setDate(monday.getDate() + 4);
 
@@ -1437,6 +1517,7 @@ function setWeekRange() {
   const el = document.getElementById("weekRange");
   if (el) {
     el.innerText = `${format(monday)} - ${format(friday)}`;
+    if (isWeekend()) el.innerText += " (next week)";
   }
 }
 
@@ -1607,7 +1688,8 @@ function openBestPartner(player, stats) {
     "Best Partners",
     ["Name","Best Partner","Win %"],
     rows,
-    player
+    player,
+    { noHighlight: true }
   );
 }
 function openHardestOpponent(player, stats) {
@@ -1626,7 +1708,8 @@ function openHardestOpponent(player, stats) {
     "Hardest Opponents",
     ["Name","Opponent","Win %"],
     rows,
-    player
+    player,
+    { noHighlight: true }
   );
 }
 function openLosingStreak(stats, selectedPlayer) {
@@ -1644,7 +1727,8 @@ function openLosingStreak(stats, selectedPlayer) {
     "Losing Streaks",
     ["Rank","Name","Streak"],
     rows,
-    selectedPlayer
+    selectedPlayer,
+    { noHighlight: false }
   );
 }
 function openGamesPlayed(stats, selectedPlayer) {
@@ -1662,16 +1746,92 @@ function openGamesPlayed(stats, selectedPlayer) {
     "Games Played",
     ["Name","Games","%"],
     rows,
-    selectedPlayer
+    selectedPlayer,
+    { noHighlight: false }
+  );
+}
+function openBestWeekdayModal(playerKey, rows) {
+  const tableRows = (rows || []).map(r => ({
+    day: r.day,
+    wins: String(r.wins),
+    games: String(r.games),
+    pct: formatWinPctDisplay(r.pct)
+  }));
+  showAnalyticsModal(
+    "Best day (weekday)",
+    ["Day", "Wins", "Games", "Win %"],
+    tableRows,
+    playerKey,
+    { noHighlight: true }
   );
 }
 function openBestDay(player, stats) {
+  if (!stats || !stats[player]) return;
   const days = stats[player].dailyWins;
+  const best = Object.entries(days).sort((a, b) => b[1] - a[1])[0];
+  showAnalyticsModal(
+    "Best calendar day",
+    ["Date", "Wins"],
+    [{ date: String(best?.[0] ?? "—"), wins: String(best?.[1] ?? "0") }],
+    player,
+    { noHighlight: true }
+  );
+}
 
-  const best = Object.entries(days)
-    .sort((a,b)=>b[1]-a[1])[0];
+let lastModalBuildStats = null;
+let lastModalPlayerKey = null;
+let lastModalDeep = null;
+let lastModalWinPctStr = "";
+let lastModalAvgPointsStr = "";
+let lastModalGamesPlayed = 0;
 
-  alert(`Best Day: ${best?.[0]} (${best?.[1]} wins)`);
+function handleAnalyticsStatClick(kind) {
+  const pk = lastModalPlayerKey;
+  const stats = lastModalBuildStats;
+  const deep = lastModalDeep;
+  if (!pk) return;
+
+  if (kind === "winPct") {
+    showAnalyticsModal(
+      "Win %",
+      ["Stat", "Value"],
+      [{ stat: "Win rate", value: lastModalWinPctStr || "—" }],
+      pk,
+      { noHighlight: true }
+    );
+    return;
+  }
+  if (kind === "avgPoints") {
+    showAnalyticsModal(
+      "Avg points",
+      ["Stat", "Value"],
+      [{ stat: "Points per game", value: lastModalAvgPointsStr || "—" }],
+      pk,
+      { noHighlight: true }
+    );
+    return;
+  }
+  if (kind === "winStreak") {
+    showAnalyticsModal(
+      "Longest win streak",
+      ["Stat", "Value"],
+      [{ stat: "Games in a row", value: String(deep?.winStreak ?? "—") }],
+      pk,
+      { noHighlight: true }
+    );
+    return;
+  }
+  if (kind === "bestDay") {
+    openBestWeekdayModal(pk, deep?.weekdayRows || []);
+    return;
+  }
+
+  if (!stats || !stats[pk]) return;
+
+  if (kind === "bestPartner") openBestPartner(pk, stats);
+  else if (kind === "hardest") openHardestOpponent(pk, stats);
+  else if (kind === "loseStreak") openLosingStreak(stats, pk);
+  else if (kind === "games") openGamesPlayed(stats, pk);
 }
 
 
@@ -1822,23 +1982,59 @@ function buildPlayerStats(history) {
 
 
 
-function showAnalyticsModal(title, columns, rows, selectedPlayer) {
-  const container = document.getElementById("analytics");
+function closeGlobalAnalyticsModal() {
+  const el = document.getElementById("globalAnalyticsModal");
+  if (!el) return;
+  el.innerHTML = "";
+  el.classList.remove("is-open");
+  el.setAttribute("hidden", "");
+}
 
-  container.innerHTML = `
-    <h3 style="margin-bottom:10px;">${title}</h3>
-    <div class="leaderboard">
-      <div class="leaderboard-header">
-        ${columns.map(c => `<span>${c}</span>`).join("")}
-      </div>
+function analyticsRowHighlightClass(r, selectedPlayer, opts) {
+  if (opts.noHighlight || selectedPlayer == null || selectedPlayer === "") return "";
+  const sp = String(selectedPlayer).toLowerCase();
+  const rn = (r.name != null ? String(r.name) : "").toLowerCase();
+  if (rn === sp) return "you";
+  if (String(r.name || "") === capitalize(sp)) return "you";
+  return "";
+}
 
-      ${rows.map(r => `
-        <div class="leaderboard-row ${r.name === selectedPlayer ? "you" : ""}">
-          ${Object.values(r).map(v => `<span>${v}</span>`).join("")}
+function showAnalyticsModal(title, columns, rows, selectedPlayer, opts = {}) {
+  const container =
+    document.getElementById("globalAnalyticsModal") ||
+    document.getElementById("analytics");
+  if (!container) return;
+
+  const esc = escapeHtml;
+  const body = `
+    <div class="global-analytics-modal__backdrop" data-analytics-close="1"></div>
+    <div class="global-analytics-modal__panel" role="dialog" aria-modal="true" aria-labelledby="analyticsModalTitle">
+      <button type="button" class="global-analytics-modal__close" data-analytics-close="1" aria-label="Close">&times;</button>
+      <h3 id="analyticsModalTitle" class="global-analytics-modal__title">${esc(title)}</h3>
+      <div class="leaderboard leaderboard--modal">
+        <div class="leaderboard-header">
+          ${columns.map(c => `<span>${esc(c)}</span>`).join("")}
         </div>
-      `).join("")}
+        ${rows
+          .map(
+            r => `
+        <div class="leaderboard-row ${analyticsRowHighlightClass(r, selectedPlayer, opts)}">
+          ${Object.values(r)
+            .map(v => `<span>${esc(String(v))}</span>`)
+            .join("")}
+        </div>`
+          )
+          .join("")}
+      </div>
     </div>
   `;
+
+  container.removeAttribute("hidden");
+  container.classList.add("is-open");
+  container.innerHTML = body;
+  container.querySelectorAll("[data-analytics-close]").forEach(el => {
+    el.addEventListener("click", () => closeGlobalAnalyticsModal());
+  });
 }
 
 
@@ -1897,10 +2093,14 @@ function analyzePlayerFromSets(sets, player) {
   let partnerStats = {};
   let opponentStats = {};
   let gameResults = []; // 1 = win, 0 = loss
+  const weekdayStats = {};
 
   sets.forEach(set => {
     const teamA = (set.teamA || "").toLowerCase().split("/").map(p => p.trim());
     const teamB = (set.teamB || "").toLowerCase().split("/").map(p => p.trim());
+    const setDate = set.date ? new Date(set.date) : null;
+    const weekday =
+      setDate && !isNaN(setDate.getTime()) ? setDate.getDay() : null;
 
     (set.scores || []).forEach(score => {
       if (!score || !score.includes("-")) return;
@@ -1917,6 +2117,12 @@ function analyzePlayerFromSets(sets, player) {
 
       const won = (isA && winnerA) || (isB && !winnerA);
       gameResults.push(won ? 1 : 0);
+
+      if (weekday !== null) {
+        if (!weekdayStats[weekday]) weekdayStats[weekday] = { wins: 0, games: 0 };
+        weekdayStats[weekday].games++;
+        if (won) weekdayStats[weekday].wins++;
+      }
 
       // ✅ BEST PARTNER
       const partner = myTeam.find(p => p !== player);
@@ -1975,11 +2181,33 @@ function analyzePlayerFromSets(sets, player) {
     maxLose = Math.max(maxLose, curLose);
   });
 
+  const wdNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  let bestWeekdayLabel = "—";
+  let bestWeekdayPct = -1;
+  const weekdayRows = Object.entries(weekdayStats)
+    .map(([wd, s]) => ({
+      day: wdNames[Number(wd)],
+      wins: s.wins,
+      games: s.games,
+      pct: s.games ? s.wins / s.games : 0
+    }))
+    .filter(r => r.games > 0)
+    .sort((a, b) => b.pct - a.pct || b.games - a.games);
+
+  weekdayRows.forEach(r => {
+    if (r.games >= 1 && r.pct > bestWeekdayPct) {
+      bestWeekdayPct = r.pct;
+      bestWeekdayLabel = r.day;
+    }
+  });
+
   return {
     bestPartner,
     hardestOpponent,
     winStreak: maxWin,
-    loseStreak: maxLose
+    loseStreak: maxLose,
+    bestWeekdayLabel,
+    weekdayRows
   };
 }
 
