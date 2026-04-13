@@ -59,6 +59,9 @@ let historyCache = [];
 let selectedPlayer = "max";
 let playerSelectTouched = false;
 let lastTodaySetsData = null;
+let scheduleOpenDate = null;
+let scheduleRefreshPausedUntil = 0;
+const BOOK_COURT_STORAGE_KEY = "pbTracker_bookedCourtDays_v1";
 
 const LS_DAY_COMPLETE = "pbTracker_dayComplete";
 const LS_PLAYER_PREF = "pbTracker_playerPref_v1";
@@ -308,6 +311,10 @@ async function callAPI(params, options = {}) {
       cache: "no-store"
     });
 
+    if (!res.ok) {
+      console.error(`API HTTP ${res.status} for`, params);
+    }
+
     const text = await res.text();
 
     let data;
@@ -517,6 +524,11 @@ function toggleSet(el) {
     el.classList.add("active");
     if (card) card.classList.add("expanded");
     body.style.maxHeight = body.scrollHeight + "px";
+    const dayCard = el.closest(".day-card");
+    scheduleOpenDate = dayCard?.dataset?.date || scheduleOpenDate;
+  } else {
+    const dayCard = el.closest(".day-card");
+    if (dayCard?.dataset?.date === scheduleOpenDate) scheduleOpenDate = null;
   }
 }
 
@@ -615,6 +627,7 @@ async function addPlayerPrompt() {
 
 function toggleCheck(btn, date, col) {
   const input = btn.parentElement.querySelector("input");
+  persistScheduleName(date, col, input?.value || "");
 
   let state = Number(btn.dataset.state || 0);
 
@@ -745,6 +758,39 @@ function maybeRollScheduleLocalWeek() {
     }
   }
   localStorage.setItem(LS_SCHEDULE_WEEK_ANCHOR, anchorKey);
+}
+
+function getBookCourtMap() {
+  try {
+    return JSON.parse(localStorage.getItem(BOOK_COURT_STORAGE_KEY) || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function isBookCourtDone(date) {
+  const map = getBookCourtMap();
+  const key = new Date(date).toISOString().slice(0, 10);
+  return Boolean(map[key]);
+}
+
+function setBookCourtDone(date) {
+  const map = getBookCourtMap();
+  const key = new Date(date).toISOString().slice(0, 10);
+  map[key] = true;
+  localStorage.setItem(BOOK_COURT_STORAGE_KEY, JSON.stringify(map));
+}
+
+function bookCourt(date, button) {
+  console.log("🎾 Book Court clicked", { date });
+  setBookCourtDone(date);
+  if (button) {
+    button.disabled = true;
+    button.classList.add("is-booked");
+    button.textContent = "Court Booked";
+  }
+  // Browser security note: direct execution of local .bat files is blocked.
+  // This preserves UI state and logs intent until a local listener/protocol is wired.
 }
 
 async function loadSchedule() {
@@ -886,10 +932,19 @@ async function loadSchedule() {
               `;
             }).join("")}
           </div>
+          <button class="book-court-btn ${isBookCourtDone(row.date) ? "is-booked" : ""}"
+            onclick="bookCourt('${row.date}', this)"
+            ${isBookCourtDone(row.date) ? "disabled" : ""}>
+            ${isBookCourtDone(row.date) ? "Court Booked" : "Book Court"}
+          </button>
         </div>
       </div>
     `;
   }).join("");
+  if (scheduleOpenDate) {
+    const openHeader = container.querySelector(`.day-card[data-date="${scheduleOpenDate}"] .day-header`);
+    if (openHeader) toggleSet(openHeader);
+  }
   endTimer("Schedule");
 }
 
@@ -998,38 +1053,55 @@ async function loadRankings() {
   const max = latest + 8;
   const min = latest - 8;
 
-  if (chart) chart.destroy();
-  chart = new Chart(document.getElementById("chart"), {
-    type: "line",
-    data: {
-      labels: playerHistory.map(x => x.date),
-      datasets: [{
-        data: values,
-        borderWidth: 3,
-        tension: 0.4
-      }]
-    },
-    options: {
-      layout: {
-        padding: {
-          top: 0,
-          bottom: 0
-        }
+  const chartEl = document.getElementById("chart");
+  if (!chartEl) return;
+  const labels = playerHistory.map(x => x.date);
+  const chartData = [...values];
+
+  if (!chart) {
+    chart = new Chart(chartEl, {
+      type: "line",
+      data: {
+        labels,
+        datasets: [{
+          data: chartData,
+          borderWidth: 3,
+          tension: 0.4
+        }]
       },
-      scales: {
-        y: {
-          min,
-          max,
-          ticks: {
-            callback: v => v + "%"
+      options: {
+        animation: false,
+        layout: {
+          padding: {
+            top: 0,
+            bottom: 0
           }
+        },
+        scales: {
+          y: {
+            min,
+            max,
+            ticks: {
+              callback: v => v + "%"
+            }
+          }
+        },
+        plugins: {
+          legend: { display: false }
         }
-      },
-      plugins: {
-        legend: { display: false }
       }
+    });
+  } else {
+    const old = JSON.stringify({ labels: chart.data.labels, data: chart.data.datasets?.[0]?.data });
+    const next = JSON.stringify({ labels, data: chartData });
+    if (old !== next) {
+      chart.data.labels = labels;
+      chart.data.datasets[0].data = chartData;
+      chart.options.scales.y.min = min;
+      chart.options.scales.y.max = max;
+      chart.update("none");
     }
-  });
+  }
 
   const filtered = [...data].filter(p =>
     p.winPct > 0 || p.pointsAvg > 0
@@ -1054,8 +1126,10 @@ async function onRankingsPlayerChange() {
 
 async function ultraSmartRefresh() {
   if (document.visibilityState !== "visible") return;
+  if (Date.now() < scheduleRefreshPausedUntil) return;
+  if (document.activeElement && document.activeElement.classList?.contains("player-input")) return;
 
-  const meta = await callAPI({ action: "lastUpdated" });
+  const meta = await callAPI({ action: "lastUpdated" }, { force: true });
 
   if (!meta || meta === globalData.lastUpdated) return;
 
@@ -1242,6 +1316,7 @@ function buildResultsHtml(standings, morningPcts, afterTrend) {
 }
 
 async function finishDay() {
+  console.log("🏁 finishDay clicked");
 
   // 🔥 1. SNAPSHOT BEFORE
   const before = await callAPI({ action: "getUserTrend" });
@@ -1254,6 +1329,10 @@ async function finishDay() {
 
   // 🔥 4. GET TODAY SETS (for wins + points)
   const sets = await callAPI({ action: "getTodaySets" });
+  if (!Array.isArray(sets)) {
+    console.error("❌ finishDay failed: no sets data", sets);
+    return;
+  }
 
   const results = {};
 
@@ -1311,11 +1390,19 @@ async function finishDay() {
 
   // ===== RENDER =====
   renderResults(final);
+  setDayComplete(true);
+  updateDoneUiVisibility();
+  await loadRankings();
 
   const shareId = generateShareId();
   localStorage.setItem("results_" + shareId, JSON.stringify(final));
+  localStorage.setItem(`pbTracker_results_${todayKey()}`, buildResultsHtml(
+    final.map(x => ({ ...x, key: x.name.toLowerCase(), displayName: x.name })),
+    getMorningWinPctSnapshot(before || []),
+    after || []
+  ));
 
-  const shareUrl = `${window.location.origin}/share/?r=${shareId}`;
+  const shareUrl = `${window.location.origin}/pbTracker/share/?r=${shareId}`;
 
   showShareButton(shareUrl);
 
@@ -1338,7 +1425,7 @@ function showShareButton(url) {
 
 function loadSharedResults() {
   const params = new URLSearchParams(window.location.search);
-  const shareId = params.get("share");
+  const shareId = params.get("r") || params.get("share");
 
   if (!shareId) return false;
 
@@ -1392,8 +1479,11 @@ function renderResults(data) {
     </div>
   `;
 
-  // 🔥 REPLACE DONE BUTTON CARD
-  document.querySelector("#input .card").innerHTML = html;
+  const box = document.getElementById("dayResults");
+  if (box) {
+    box.innerHTML = html;
+    box.style.display = "block";
+  }
 }
 
 
@@ -1418,8 +1508,11 @@ async function revertDay() {
   }
   const ds = document.getElementById("dayStats");
   if (ds) ds.innerHTML = "";
+  const rankingsBox = document.getElementById("rankingsAnalytics");
+  if (rankingsBox) rankingsBox.innerHTML = "";
   updateDoneUiVisibility();
   await loadTodaySetsAll();
+  await loadRankings();
 }
 
 
@@ -1487,6 +1580,7 @@ function attachAutocomplete(input, date, col) {
   }
 
   input.addEventListener("input", () => {
+    scheduleRefreshPausedUntil = Date.now() + 8000;
     const val = input.value.toLowerCase();
 
     dropdown.innerHTML = playersCache
@@ -1506,6 +1600,7 @@ function attachAutocomplete(input, date, col) {
           col,
           name: el.innerText
         }).then(() => {
+          console.log("✅ schedule saved via autocomplete", { date, col, name: el.innerText });
           loadTodaySetsAll();
           loadSchedule();
         });
@@ -1516,6 +1611,19 @@ function attachAutocomplete(input, date, col) {
   // 🔥 FIX: close dropdown on blur
   input.addEventListener("blur", () => {
     setTimeout(() => dropdown.innerHTML = "", 150);
+  });
+}
+
+function persistScheduleName(date, col, rawName) {
+  const name = String(rawName || "").trim();
+  if (!name) return;
+  callAPI({
+    action: "updateSchedule",
+    date,
+    col,
+    name
+  }).then(() => {
+    console.log("✅ schedule name persisted", { date, col, name });
   });
 }
 
@@ -1800,6 +1908,7 @@ let lastModalAvgPointsStr = "";
 let lastModalGamesPlayed = 0;
 
 function handleAnalyticsStatClick(kind) {
+  console.log("📊 analytics stat clicked", kind);
   const pk = lastModalPlayerKey;
   const stats = lastModalBuildStats;
   const deep = lastModalDeep;
@@ -2004,6 +2113,17 @@ function closeGlobalAnalyticsModal() {
   el.setAttribute("hidden", "");
 }
 
+function getAnalyticsTablesContainer() {
+  const activePage = document.querySelector(".page.active")?.id;
+  if (activePage === "rankings") return document.getElementById("rankingsAnalyticsTables");
+  return document.getElementById("dashboardAnalyticsTables");
+}
+
+function closeAnalyticsPanel(buttonEl) {
+  const panel = buttonEl?.closest(".analytics-table-panel");
+  if (panel) panel.remove();
+}
+
 function analyticsRowHighlightClass(r, selectedPlayer, opts) {
   if (opts.noHighlight || selectedPlayer == null || selectedPlayer === "") return "";
   const sp = String(selectedPlayer).toLowerCase();
@@ -2014,17 +2134,15 @@ function analyticsRowHighlightClass(r, selectedPlayer, opts) {
 }
 
 function showAnalyticsModal(title, columns, rows, selectedPlayer, opts = {}) {
-  const container =
-    document.getElementById("globalAnalyticsModal") ||
-    document.getElementById("analytics");
+  const container = getAnalyticsTablesContainer();
   if (!container) return;
-
   const esc = escapeHtml;
   const body = `
-    <div class="global-analytics-modal__backdrop" data-analytics-close="1"></div>
-    <div class="global-analytics-modal__panel" role="dialog" aria-modal="true" aria-labelledby="analyticsModalTitle">
-      <button type="button" class="global-analytics-modal__close" data-analytics-close="1" aria-label="Close">&times;</button>
-      <h3 id="analyticsModalTitle" class="global-analytics-modal__title">${esc(title)}</h3>
+    <div class="analytics-table-panel">
+      <div class="analytics-table-head">
+        <h3 class="global-analytics-modal__title">${esc(title)}</h3>
+        <button type="button" class="global-analytics-modal__close" onclick="closeAnalyticsPanel(this)" aria-label="Close">&times;</button>
+      </div>
       <div class="leaderboard leaderboard--modal">
         <div class="leaderboard-header">
           ${columns.map(c => `<span>${esc(c)}</span>`).join("")}
@@ -2042,13 +2160,7 @@ function showAnalyticsModal(title, columns, rows, selectedPlayer, opts = {}) {
       </div>
     </div>
   `;
-
-  container.removeAttribute("hidden");
-  container.classList.add("is-open");
-  container.innerHTML = body;
-  container.querySelectorAll("[data-analytics-close]").forEach(el => {
-    el.addEventListener("click", () => closeGlobalAnalyticsModal());
-  });
+  container.insertAdjacentHTML("beforeend", body);
 }
 
 
@@ -2424,9 +2536,7 @@ function navigate(page) {
   const player = params.get("p");
 
   let path = page === "input" ? `${base}/` : `${base}/${page}/`;
-  if (player) {
-    path += `share/?p=${encodeURIComponent(player)}`;
-  }
+  if (player) path += `?p=${encodeURIComponent(player)}`;
 
   window.history.pushState({}, "", path);
   showPage(page);
@@ -2436,7 +2546,7 @@ function goTo(page) {
   const params = new URLSearchParams(window.location.search);
   const player = params.get("p");
   const suffix = player ? `?p=${encodeURIComponent(player)}` : "";
-  window.location.href = `/pbTracker/${page}/share/${suffix}`;
+  window.location.href = page === "input" ? `/pbTracker/${suffix}` : `/pbTracker/${page}/${suffix}`;
 }
 
 window.addEventListener("popstate", () => {
