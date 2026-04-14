@@ -59,6 +59,20 @@ h1, h2 {
   cursor: pointer;
   gap: 8px;
 }
+.set-container {
+  display: block; /* 🔥 force vertical layout */
+  width: 100%;
+}
+
+.set-body {
+  overflow: hidden;
+
+  transition: max-height 0.25s ease;
+}
+
+.set-body.open {
+  max-height: 2000px; /* big enough */
+}
 
 .carrot {
   transition: transform 0.2s;
@@ -186,9 +200,6 @@ h1, h2 {
    MATCH / SET UI
 ========================= */
 
-.set-container {
-  margin-bottom: 30px;
-}
 
 .section-title {
   color: #e5e7eb;

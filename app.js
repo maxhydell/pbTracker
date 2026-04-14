@@ -378,8 +378,9 @@ function renderSetsInto(container, data, opts = {}) {
           Save
         </button>
 
-        <div class="set-header" onclick="toggleSet(this)">
+        <span class="carrot"></span>
       </div>
+
       <div class="set-body"></div>
     `;
 
