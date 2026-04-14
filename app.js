@@ -365,9 +365,16 @@ function renderSetsInto(container, data, opts = {}) {
     const setWrapper = document.createElement("div");
     setWrapper.className = "set-container";
     setWrapper.innerHTML = `
-      <div class="set-header" onclick="toggleSet(this)">
+      <div class="set-header">
         <span>Set ${match.set}</span>
-       <span class="carrot"></span>
+
+        <button class="set-save-btn"
+          id="save-btn-${match.set}"
+          onclick="saveSet(${match.set})">
+          Save
+        </button>
+
+        <span class="carrot" onclick="toggleSet(this.parentElement)"></span>
       </div>
       <div class="set-body"></div>
     `;
@@ -494,6 +501,50 @@ function restoreResultsIfAny() {
     el.style.display = "block";
   }
 }
+
+
+
+
+async function saveSet(setNumber) {
+  const btn = document.getElementById(`save-btn-${setNumber}`);
+  if (!btn) return;
+
+  btn.innerText = "Saving...";
+  btn.disabled = true;
+
+  try {
+    for (let i = 0; i < 3; i++) {
+      const inputs = document.querySelectorAll(
+        `.match-card [oninput*="updateScore(${setNumber}, ${i}"] input`
+      );
+
+      if (!inputs.length) continue;
+
+      const a = inputs[0].value;
+      const b = inputs[1].value;
+
+      if (!a || !b) continue;
+
+      const score = `${a}-${b}`;
+
+      await callAPI({
+        action: "submitScore",
+        set: setNumber,
+        game: i + 1,
+        score
+      });
+    }
+
+    btn.innerText = "Saved";
+    btn.classList.add("saved");
+
+  } catch (e) {
+    btn.innerText = "Error";
+  }
+
+  btn.disabled = false;
+}
+
 
 
 function unlockGame(set, gameIndex) {
@@ -1714,6 +1765,13 @@ function updateScore(set, gameIndex, input) {
 
     const score = `${a}-${b}`;
 
+    // 🔥 RESET SAVE BUTTON (NEW)
+    const btn = document.getElementById(`save-btn-${set}`);
+    if (btn) {
+      btn.innerText = "Save";
+      btn.classList.remove("saved");
+    }
+
     // 🔥 HANDLE EMPTY SCORE
     if (a === 0 && b === 0) {
       callAPI({
@@ -1760,16 +1818,6 @@ function updateScore(set, gameIndex, input) {
       game: gameIndex + 1,
       score
     });
-
-    // 🔥 API CALL (UNCHANGED BUT IMPROVED)
-    callAPI({
-      action: "submitScore",
-      set,
-      game: gameIndex + 1,
-      score
-    }, { force: true })
-    .then(res => {
-      console.log("✅ API RESPONSE:", res);
 
       card.classList.remove("saving");
       delete optimisticUpdates[key];
