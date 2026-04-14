@@ -1149,20 +1149,22 @@ async function onRankingsPlayerChange() {
 async function ultraSmartRefresh() {
   if (document.visibilityState !== "visible") return;
   if (Date.now() < scheduleRefreshPausedUntil) return;
-  if (document.activeElement && document.activeElement.classList?.contains("player-input")) return;
+  if (document.activeElement?.classList?.contains("player-input")) return;
 
   const meta = await callAPI({ action: "lastUpdated" }, { force: true });
 
-  if (!meta || meta === globalData.lastUpdated) return;
+  // 🔥 FIX: stop loop
+  if (!meta || meta === lastMetaSeen) return;
+
+  lastMetaSeen = meta;
 
   console.log("⚡ Updating FULL DATA (batch)");
 
   await loadAllData(true);
 
-  // re-render EVERYTHING from cache
   loadTodaySetsAll();
   loadRankings();
-  loadSchedule();
+  if (meta.scheduleChanged) loadSchedule();
 }
 
 function unlockPlayer(btn, date, col) {
