@@ -1,4 +1,4 @@
-const API_URL = "https://script.google.com/macros/s/AKfycbzQj032F3STFH5nwDuSP7EXKkXA9uSXtTCYCHLnaXAZPECNRawoaile6pDVlWyWYYBcvA/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbzQKAvfVSE2TRtZWYeV4DrEdhmTMGkCiJ0RPRUaljR12XXoSc3vlMb8ocNKTabazdYd/exec";
 
 
 window.loadedShared = false;
