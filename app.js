@@ -1,5 +1,6 @@
 const API_URL = "https://script.google.com/macros/s/AKfycbxK3A8M-NZG6gl0Tm5gJ_tkDdJbWqtBUUEUhWdT6AyxyrvapDm8x8XGmU9DD4aH1A9T/exec";
 
+
 window.loadedShared = false;
 let lastMetaSeen = null;
 function log(label, data) {
@@ -19,7 +20,8 @@ function endTimer(name) {
   console.timeEnd(`⏱️ ${name}`);
 }
 
-
+let scheduleDirty = false;
+let pendingScheduleChanges = [];
 let touchStartY = 0;
 let holdTimer;
 let optimisticUpdates = {};
@@ -636,22 +638,26 @@ function toggleCheck(btn, date, col) {
 
   let state = Number(btn.dataset.state || 0);
 
+  // 🔴 0 → 1 (sent)
   if (state === 0) {
     btn.src = "orange.png";
     btn.dataset.state = 1;
 
-    callAPI({
-      action: "updateSchedule",
+    scheduleDirty = true;
+
+    pendingScheduleChanges.push({
+      type: "status",
       date,
       col,
       status: 1
-    }).then(async () => {
-      await loadAllData(true);
-      loadTodaySetsAll();
-    });// 🔥 FORCE REFRESH FROM SERVER
-    return; // 🔥 IMPORTANT
+    });
+
+    updateSaveButton();
+
+    return;
   }
 
+  // 🟡 1 → 2 (confirmed)
   if (state === 1) {
     btn.src = "green.png";
     btn.dataset.state = 2;
@@ -659,15 +665,16 @@ function toggleCheck(btn, date, col) {
     input.disabled = true;
     input.style.border = "2px solid #00c853";
 
-    callAPI({
-      action: "updatePlayerStatus",
+    scheduleDirty = true;
+
+    pendingScheduleChanges.push({
+      type: "status",
       date,
       col,
       status: 2
-    }).then(async () => {
-      await loadAllData(true); // 🔥 refresh cache
-      loadSchedule();          // 🔥 single clean reload
     });
+
+    updateSaveButton();
 
     setTimeout(() => {
       checkFullDay(date);
@@ -1181,15 +1188,18 @@ function unlockPlayer(btn, date, col) {
   check.src = "white.png";
   check.dataset.state = 0;
 
-  callAPI({
-    action: "updatePlayerStatus",
+  // 🔥 NEW: queue change instead of API call
+  scheduleDirty = true;
+
+  pendingScheduleChanges.push({
+    type: "status",
     date,
     col,
     status: 0
   });
+
+  updateSaveButton();
 }
-
-
 
 function capitalize(name) {
   return name.charAt(0).toUpperCase() + name.slice(1).toLowerCase();
@@ -1629,21 +1639,24 @@ function attachAutocomplete(input, date, col) {
         input.value = el.innerText;
         dropdown.innerHTML = "";
 
-        callAPI({
-          action: "updateSchedule",
+        // 🔥 NEW: queue change instead of API call
+        scheduleDirty = true;
+
+        pendingScheduleChanges.push({
+          type: "name",
           date,
           col,
           name: el.innerText
-        }).then(() => {
-          console.log("✅ schedule saved via autocomplete", { date, col, name: el.innerText });
-          loadTodaySetsAll();
-          loadSchedule();
         });
+
+        updateSaveButton();
+
+        console.log("📝 queued schedule change", { date, col, name: el.innerText });
       };
     });
   });
 
-  // 🔥 FIX: close dropdown on blur
+  // 🔥 close dropdown on blur
   input.addEventListener("blur", () => {
     setTimeout(() => dropdown.innerHTML = "", 150);
   });
@@ -1652,14 +1665,17 @@ function attachAutocomplete(input, date, col) {
 function persistScheduleName(date, col, rawName) {
   const name = String(rawName || "").trim();
   if (!name) return;
-  callAPI({
-    action: "updateSchedule",
+
+  scheduleDirty = true;
+
+  pendingScheduleChanges.push({
+    type: "name",
     date,
     col,
     name
-  }).then(() => {
-    console.log("✅ schedule name persisted", { date, col, name });
   });
+
+  updateSaveButton();
 }
 
 
@@ -1992,6 +2008,55 @@ function handleAnalyticsStatClick(kind) {
   else if (kind === "games") openGamesPlayed(stats, pk);
 }
 
+function updateSaveButton() {
+  const btn = document.getElementById("scheduleSaveBtn");
+  if (!btn) return;
+
+  if (scheduleDirty) {
+    btn.innerText = "Save";
+    btn.classList.remove("saved");
+  } else {
+    btn.innerText = "Saved";
+    btn.classList.add("saved");
+  }
+}
+
+
+
+async function saveScheduleChanges() {
+  if (!scheduleDirty || !pendingScheduleChanges.length) return;
+
+  const changes = [...pendingScheduleChanges];
+
+  console.log("💾 Saving schedule changes:", changes);
+
+  for (const change of changes) {
+    if (change.type === "name") {
+      await callAPI({
+        action: "updateSchedule",
+        date: change.date,
+        col: change.col,
+        name: change.name
+      });
+    }
+
+    if (change.type === "status") {
+      await callAPI({
+        action: "updateSchedule",
+        date: change.date,
+        col: change.col,
+        status: change.status
+      });
+    }
+  }
+
+  pendingScheduleChanges = [];
+  scheduleDirty = false;
+
+  updateSaveButton();
+
+  console.log("✅ Schedule saved");
+}
 
 
 

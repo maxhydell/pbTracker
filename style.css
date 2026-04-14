@@ -1442,3 +1442,29 @@ select.dash-player-select option,
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
 }
+
+
+/* button for schedule save */
+#scheduleSaveWrap {
+  position: sticky;
+  bottom: 20px;
+  display: flex;
+  justify-content: center;
+  margin-top: 20px;
+}
+
+#scheduleSaveBtn {
+  background: #111;
+  color: white;
+  border: none;
+  padding: 14px 28px;
+  border-radius: 12px;
+  font-weight: bold;
+  box-shadow: 0 0 15px rgba(0,0,0,0.6);
+  transition: all 0.2s ease;
+}
+
+#scheduleSaveBtn.saved {
+  background: #00c853;
+  box-shadow: 0 0 15px rgba(0,200,83,0.6);
+}
