@@ -4,6 +4,7 @@ const API_URL = "https://script.google.com/macros/s/AKfycbxkzKSWiHhnORLahEMWD4iu
 
 const memoryCache = {};
 let playersCache = [];
+let isEditingScores = false;
 let historyCache = [];
 let selectedPlayer = "max";
 let playerSelectTouched = false;
@@ -1211,6 +1212,7 @@ async function onRankingsPlayerChange() {
 }
 
 async function ultraSmartRefresh() {
+  if (isEditingScores) return;
   if (document.visibilityState !== "visible") return;
   if (Date.now() < scheduleRefreshPausedUntil) return;
   if (document.activeElement?.classList?.contains("player-input")) return;
@@ -1761,6 +1763,7 @@ function updateScore(set, gameIndex, input) {
   clearTimeout(scoreTimeout);
 
   const parent = input.parentElement;
+  isEditingScores = true;
   const inputs = parent.querySelectorAll("input");
 
   if (inputs.length < 2) return;
@@ -1825,6 +1828,7 @@ function updateScore(set, gameIndex, input) {
       delete optimisticUpdates[key];
 
       showSuccess(`status-${set}-${gameIndex}`);
+      isEditingScores = false; // 🔥 unlock
     }, 200);
 
   }, 600); // 🔥 slightly faster than 1000ms
