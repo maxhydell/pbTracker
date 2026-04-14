@@ -369,16 +369,16 @@ function renderSetsInto(container, data, opts = {}) {
     const setWrapper = document.createElement("div");
     setWrapper.className = "set-container";
     setWrapper.innerHTML = `
-      <div class="set-header">
+      <div class="set-header" onclick="toggleSet(this)">
         <span>Set ${match.set}</span>
 
         <button class="set-save-btn"
           id="save-btn-${match.set}"
-          onclick="saveSet(${match.set})">
+          onclick="event.stopPropagation(); saveSet(${match.set})">
           Save
         </button>
 
-        <span class="carrot" onclick="toggleSet(this.parentElement)"></span>
+        <div class="set-header" onclick="toggleSet(this)">
       </div>
       <div class="set-body"></div>
     `;
