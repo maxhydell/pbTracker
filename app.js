@@ -614,18 +614,18 @@ function toggleSet(el) {
 }
 
 
-function editScore(set, current) {
-  const newScore = prompt("Edit score", current);
-  if (!newScore) return;
+// function editScore(set, current) {
+//   const newScore = prompt("Edit score", current);
+//   if (!newScore) return;
 
-  callAPI({
-    action: "submitScore",
-    set,
-    score: newScore
-  });
+ //  callAPI({
+ //    action: "submitScore",
+  //   set,
+ //    score: newScore
+//   });
 
-  loadTodaySetsAll();
-}
+ //  loadTodaySetsAll();
+// }
 
 
 function sendSMS(btn, date, col) {
