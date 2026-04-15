@@ -1,4 +1,4 @@
-const API_URL = "https://script.google.com/macros/s/AKfycbxkzKSWiHhnORLahEMWD4iulzjKqt0ukZwuzOZ9gbGwjlJo3zxd2DLnCkSvuFQiFnf6/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbxcRqmKIHADAFSZYMQppOOMDEnS1laHNz5fJdHNiFA9LrxP7FfCYLkrkCGvpT3HRlSn/exec";
 
 
 
@@ -510,7 +510,6 @@ function restoreResultsIfAny() {
 
 
 
-
 async function saveSet(setNumber) {
   const btn = document.getElementById(`save-btn-${setNumber}`);
   if (!btn) return;
@@ -519,26 +518,44 @@ async function saveSet(setNumber) {
   btn.disabled = true;
 
   try {
+    const scores = []; // 🔥 NEW
+
     for (let i = 0; i < 3; i++) {
       const inputs = document.querySelectorAll(
         `.match-card [oninput*="updateScore(${setNumber}, ${i})"] input`
       );
 
-      if (!inputs.length) continue;
+      if (!inputs.length) {
+        scores.push(""); // 🔥 keep index aligned
+        continue;
+      }
 
       const a = inputs[0].value;
       const b = inputs[1].value;
 
-      if (inputs[0].value === "" || inputs[1].value === "") continue;
+      if (inputs[0].value === "" || inputs[1].value === "") {
+        scores.push(""); // 🔥 no score
+        continue;
+      }
 
       const score = `${a}-${b}`;
 
-      await callAPI({
-        action: "submitScore",
-        set: setNumber,
-        game: i + 1,
-        score
-      });
+      scores.push(score); // 🔥 store instead of sending
+    }
+
+    // 🔥 SINGLE API CALL (FIXED)
+    const res = await callAPI({
+      action: "saveSetFull",
+      set: setNumber,
+      scores: JSON.stringify(scores)
+    });
+
+    // 🚨 RED FLAG HANDLING
+    if (res?.error) {
+      btn.innerText = "Error";
+      alert("🚨 Save blocked: ranking mismatch");
+      btn.disabled = false;
+      return;
     }
 
     btn.innerText = "Saved";
@@ -551,7 +568,6 @@ async function saveSet(setNumber) {
 
   btn.disabled = false;
 }
-
 
 
 function unlockGame(set, gameIndex) {
@@ -1765,8 +1781,8 @@ function updateScore(set, gameIndex, input) {
 
   const parent = input.parentElement;
   isEditingScores = true;
-  const inputs = parent.querySelectorAll("input");
 
+  const inputs = parent.querySelectorAll("input");
   if (inputs.length < 2) return;
 
   scoreTimeout = setTimeout(() => {
@@ -1775,27 +1791,31 @@ function updateScore(set, gameIndex, input) {
 
     const score = `${a}-${b}`;
 
-    // 🔥 RESET SAVE BUTTON (NEW)
+    // 🔥 RESET SAVE BUTTON
     const btn = document.getElementById(`save-btn-${set}`);
     if (btn) {
       btn.innerText = "Save";
       btn.classList.remove("saved");
     }
 
-    // 🔥 HANDLE EMPTY SCORE (FIXED — no API call)
+    // 🔥 EMPTY = DO NOTHING
     if (a === 0 && b === 0) {
+      isEditingScores = false;
       return;
     }
 
     input.blur();
 
-    // 🔥 DETERMINE RESULT
+    // 🔥 DETERMINE RESULT (UI ONLY)
     let result = "tie";
     if (a > b) result = "win";
     else if (b > a) result = "loss";
 
     const card = input.closest(".match-card");
-    if (!card) return;
+    if (!card) {
+      isEditingScores = false;
+      return;
+    }
 
     const badge = card.querySelector(".status-badge");
     if (badge) {
@@ -1803,7 +1823,7 @@ function updateScore(set, gameIndex, input) {
       badge.innerText = result;
     }
 
-    // 🔥 OPTIMISTIC UPDATE (NEW)
+    // 🔥 LOCAL STATE UPDATE ONLY (NO API)
     if (globalData.sets) {
       const match = globalData.sets.find(m => m.set == set);
       if (match) {
@@ -1811,11 +1831,9 @@ function updateScore(set, gameIndex, input) {
       }
     }
 
+    // 🔥 TRACK UNSAVED CHANGES
     const key = `${set}-${gameIndex}`;
     optimisticUpdates[key] = score;
-
-    // 🔥 VISUAL FEEDBACK
-    card.classList.add("saving");
 
     console.log("📝 Local score update only:", {
       set,
@@ -1823,16 +1841,10 @@ function updateScore(set, gameIndex, input) {
       score
     });
 
-    // 🔥 FIXED: replaced broken .then/.catch with safe UI update
-    setTimeout(() => {
-      card.classList.remove("saving");
-      delete optimisticUpdates[key];
+    // 🔥 DONE EDITING (no fake saving UI)
+    isEditingScores = false;
 
-      showSuccess(`status-${set}-${gameIndex}`);
-      isEditingScores = false; // 🔥 unlock
-    }, 200);
-
-  }, 600); // 🔥 slightly faster than 1000ms
+  }, 600);
 }
 
 async function getAllSets() {
