@@ -518,7 +518,7 @@ async function saveSet(setNumber) {
   btn.disabled = true;
 
   try {
-    const scores = []; // 🔥 NEW
+    const scores = [];
 
     for (let i = 0; i < 3; i++) {
       const inputs = document.querySelectorAll(
@@ -526,31 +526,29 @@ async function saveSet(setNumber) {
       );
 
       if (!inputs.length) {
-        scores.push(""); // 🔥 keep index aligned
+        scores.push("");
         continue;
       }
 
       const a = inputs[0].value;
       const b = inputs[1].value;
 
-      if (inputs[0].value === "" || inputs[1].value === "") {
-        scores.push(""); // 🔥 no score
+      if (a === "" || b === "") {
+        scores.push("");
         continue;
       }
 
-      const score = `${a}-${b}`;
-
-      scores.push(score); // 🔥 store instead of sending
+      scores.push(`${a}-${b}`);
     }
 
-    // 🔥 SINGLE API CALL (FIXED)
+    // 🔥 SEND ONCE
     const res = await callAPI({
       action: "saveSetFull",
       set: setNumber,
       scores: JSON.stringify(scores)
     });
 
-    // 🚨 RED FLAG HANDLING
+    // 🚨 RED FLAG
     if (res?.error) {
       btn.innerText = "Error";
       alert("🚨 Save blocked: ranking mismatch");
@@ -558,17 +556,24 @@ async function saveSet(setNumber) {
       return;
     }
 
+    // 🔥 CRITICAL FIX — CLEAR CACHE
+    Object.keys(memoryCache).forEach(k => delete memoryCache[k]);
+
+    // 🔥 FORCE FRESH DATA FROM SHEETS
+    await loadAllData(true);   // force=true bypasses cache
+    loadTodaySetsAll();        // reload sets UI
+    await loadRankings();      // reload rankings UI
+
     btn.innerText = "Saved";
     btn.classList.add("saved");
-    await loadRankings();
 
   } catch (e) {
+    console.error(e);
     btn.innerText = "Error";
   }
 
   btn.disabled = false;
 }
-
 
 function unlockGame(set, gameIndex) {
   const inputs = document.querySelectorAll(`[data-set="${set}"][data-game="${gameIndex}"] input`);
