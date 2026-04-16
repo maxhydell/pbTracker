@@ -174,8 +174,10 @@ const player =
   getPlayerFromURL() ||
   localStorage.getItem("player");
 
-document.getElementById("dashboardGreeting").innerText =
-  getGreeting(player);
+const greetingEl = document.getElementById("greetingText");
+if (greetingEl) {
+  greetingEl.innerText = getGreeting(player);
+}
 
 const urlPlayer = getPlayerFromURL();
 const storedPlayer = localStorage.getItem("player");
@@ -2668,19 +2670,16 @@ function renderGreeting() {
   const el = document.getElementById("greetingText");
   if (!el) return;
 
-  const url = getPlayerFromURL();
-  const stored = getPreferredPlayerFromStorage();
-  const nameKey = url || stored || "";
+  const player =
+    getPlayerFromURL() ||
+    localStorage.getItem("player");
 
-  const h = new Date().getHours();
-  let part = "Good evening";
-  if (h < 12) part = "Good morning";
-  else if (h < 17) part = "Good afternoon";
-
-  el.textContent = nameKey
-    ? `${part}, ${capitalize(nameKey)}`
-    : part;
+  el.innerText = getGreeting(player);
 }
+
+renderGreeting();
+
+
 
 function attachOnboardAutocomplete(input) {
   let dropdown = input.closest(".onboard-input-wrap")?.querySelector(".autocomplete");
