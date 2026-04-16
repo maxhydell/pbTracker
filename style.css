@@ -398,9 +398,15 @@ h1, h2 {
   display: grid;
   grid-template-columns: 60px 1.5fr 80px 100px;
   padding: 10px;
+  column-gap: 1px;
   border-bottom: 1px solid rgba(255,255,255,0.1);
+  align-items: center;
 }
 
+.leaderboard-header span,
+.leaderboard-row span {
+  text-align: center; /* 🔥 THIS FIXES ALIGNMENT */
+}
 .leaderboard-header span {
   font-weight: 700;
 }

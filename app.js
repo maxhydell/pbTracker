@@ -2015,6 +2015,7 @@ const rows = Object.entries(stats)
     games: d.games,
     pct: Math.round((d.games / maxGames) * 100) + "%"
   }))
+  .sort((a, b) => Number(b.games || 0) - Number(a.games || 0));
 
   showAnalyticsModal(
     "Games Played",
@@ -2683,7 +2684,26 @@ async function changeDashboardPlayer(name) {
 
 
 
-
+function renderPlayerOnboard() {
+  const wrap = document.getElementById("playerOnboard");
+  if (!wrap) return;
+  if (getPlayerFromURL() || getPreferredPlayerFromStorage()) {
+    wrap.style.display = "none";
+    wrap.innerHTML = "";
+    return;
+  }
+  wrap.style.display = "block";
+  wrap.innerHTML = `
+    <div class="player-onboard-inner card">
+      <p class="player-onboard-text">Please provide your name for a more tailored experience.</p>
+      <div class="onboard-input-wrap">
+        <input type="text" id="onboardPlayerInput" class="onboard-input" placeholder="Start typing your name" autocomplete="off">
+      </div>
+    </div>
+  `;
+  const inp = document.getElementById("onboardPlayerInput");
+  if (inp) attachOnboardAutocomplete(inp);
+}
 
 
 
