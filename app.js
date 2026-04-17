@@ -1,4 +1,4 @@
-const API_URL = "https://script.google.com/macros/s/AKfycbzLRWG--F39AZ55vE9AgqwLc35YFwEJvL1L3WTZQpwgQ0_IK5OO3tk4O6xTPK5eDYig/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbwwxcIeovMcpBxVzKuTfNJPIqX-JfWl544pYBw3vlArfNutFcMg85aKiukTtKtOrHWP/exec";
 
 
 
@@ -1475,7 +1475,25 @@ async function finishDay() {
   const before = await callAPI({ action: "getUserTrend" });
 
   // 🔥 2. SAVE DAY + UPDATE STATS (your existing backend logic)
-  await callAPI({ action: "saveHistory" });
+
+// 🔥 2. BUILD RESULTS (ONLY CHANGED PLAYERS)
+
+// 🔥 3. CREATE SHARE ID (NOT USED HERE ANYMORE — SAFE TO KEEP)
+const tempShareId = Math.random().toString(36).substring(2, 10);
+
+// 🔥 4. SAVE WITH ID + DATA (NO LONGER USED — SAFE BUT DOES NOTHING IMPORTANT)
+await callAPI({
+  action: "saveHistory",
+  resultId: tempShareId,
+  data: JSON.stringify(results_initial)
+});
+
+// 🔥 5. BUILD SHARE URL (TEMP — NOT USED)
+const tempShareUrl = `${window.location.origin}${getSiteBasePath()}share/?r=${tempShareId}`;
+
+
+
+
   // 🔔 REQUEST NOTIFICATION PERMISSION
 if (window.OneSignal && !localStorage.getItem("notifAsked")) {
   OneSignal.push(() => {
@@ -1559,13 +1577,21 @@ const final = Object.keys(results).map(name => {
 
   const shareId = generateShareId();
   localStorage.setItem("results_" + shareId, JSON.stringify(final));
+
+// 🔥 ADD THIS (CRITICAL)
+await callAPI({
+  action: "saveSharedResult",
+  resultId: shareId,
+  data: JSON.stringify(final)
+});
+
   localStorage.setItem(`pbTracker_results_${todayKey()}`, buildResultsHtml(
     final.map(x => ({ ...x, key: x.name.toLowerCase(), displayName: x.name })),
     getMorningWinPctSnapshot(globalData.trend || before || []),
     after || []
   ));
 
-  const shareUrl = `${getSiteBasePath()}share/?r=${shareId}`;
+  const shareUrl = `${window.location.origin}${getSiteBasePath()}share/?r=${shareId}`;
 
   const el = document.getElementById("dayResults");
   if (el) {
@@ -1592,14 +1618,27 @@ function showShareButton(url) {
   document.querySelector(".results-card").appendChild(btn);
 }
 
-function loadSharedResults() {
+async function loadSharedResults() {
   const params = new URLSearchParams(window.location.search);
   const shareId = params.get("r") || params.get("share");
 
   if (!shareId) return false;
 
-  const data = localStorage.getItem("results_" + shareId);
-  if (!data) return false;
+  // 🔥 TRY LOCAL FIRST
+  let data = localStorage.getItem("results_" + shareId);
+
+  // 🔥 FALLBACK TO BACKEND
+  if (!data) {
+    const res = await callAPI({
+      action: "getSharedResult",
+      resultId: shareId
+    });
+
+    if (!res || !res.length) return false;
+
+    renderResults(res);
+    return true;
+  }
 
   renderResults(JSON.parse(data));
   return true;
@@ -1654,8 +1693,6 @@ function renderResults(data) {
     box.style.display = "block";
   }
 }
-
-
 
 
 function generateShareId() {
@@ -2826,7 +2863,8 @@ window.addEventListener("popstate", () => {
 })();
 
 document.addEventListener("DOMContentLoaded", async () => {
-  const loadedShared = loadSharedResults();
+  const loadedShared = await loadSharedResults();
+
 
   if (loadedShared) return; // 🔥 STOP normal app
   try {
@@ -2896,5 +2934,3 @@ window.addEventListener("beforeunload", function (e) {
 
 
 
-
-setInterval(ultraSmartRefresh, 4000);

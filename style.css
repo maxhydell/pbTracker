@@ -6,12 +6,62 @@ body {
   margin: 0;
   font-family: 'League Spartan', sans-serif;
   background:
-    radial-gradient(1200px 480px at 15% -10%, rgba(58, 108, 244, 0.28), transparent 58%),
-    radial-gradient(900px 380px at 85% 0%, rgba(0, 200, 160, 0.2), transparent 55%),
-    linear-gradient(180deg, #07101f 0%, #070b16 100%);
+    /* top glow */
+    radial-gradient(ellipse 120% 80% at 50% -20%, rgba(54,162,235,0.08), transparent 55%),
+
+    /* RIGHT EDGE LIGHT (main glow from screenshot) */
+    radial-gradient(circle at 100% 50%, rgba(54,162,235,0.18), transparent 35%),
+
+    /* LEFT EDGE (subtle balance) */
+    radial-gradient(circle at 0% 40%, rgba(54,162,235,0.08), transparent 40%),
+
+    /* vertical depth bands (KEY effect) */
+    linear-gradient(90deg, rgba(10,20,40,0.6), rgba(5,10,18,1) 40%),
+
+    /* base */
+    #050a12;
   color: white;
   overflow-y: auto;
 }
+
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+
+  background:
+    radial-gradient(circle at 45% 60%, rgb(0 38 82 / 34%), transparent 40%),
+    radial-gradient(circle at 15% 10%, rgb(0 13 224 / 8%), #00000000 35%),
+    radial-gradient(circle at 80% 100%, rgb(0 0 0), transparent 55%);
+
+  filter: blur(30px);
+  opacity: 5;
+}
+
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+
+  background-image:
+    linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px);
+
+  background-size: 80px 80px;
+
+  opacity: 0.22;
+}
+
+
+
+
+
+
 
 
 * {
@@ -91,6 +141,8 @@ h1, h2 {
 .app {
   max-width: 430px;
   margin: auto;
+  position: relative;
+  z-index: 1;
   height: 100vh;
   padding: 10px 16px;
   position: relative;
@@ -1095,10 +1147,13 @@ select.dash-player-select option,
 
 @media (prefers-color-scheme: dark) {
   body {
-    background: #000;
-    color: white;
-  }
-
+  margin: 0;
+  font-family: 'League Spartan', sans-serif;
+  background:
+    radial-gradient(ellipse 120% 80% at 50% -20%, rgba(54, 162, 235, 0.07), transparent 50%),
+    #050a12;
+  color: white;
+}
   .card {
     background: rgba(30,30,30,0.7);
   }
