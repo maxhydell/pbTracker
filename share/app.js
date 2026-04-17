@@ -1,4 +1,4 @@
-const API_URL = "https://script.google.com/macros/s/AKfycbyb7F3okADxJpkwAZahSRuGkKArYUwS8DBPAnvuSb5auQOSWNEg-4i_Ffy7y7RHFe9M/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbwwxcIeovMcpBxVzKuTfNJPIqX-JfWl544pYBw3vlArfNutFcMg85aKiukTtKtOrHWP/exec";
 const APP_ORIGIN = "https://maxhydell.github.io/pbTracker/";
 
 function getResultsFromURL() {
@@ -476,7 +476,10 @@ async function renderSharedResults(id) {
   const dash = document.getElementById("dashboardAnalytics");
   if (dash) dash.innerHTML = "";
 
-  const raw = await callAPI({ action: "getSharedResults", id });
+  const raw = await callAPI({
+           action: "getSharedResult",
+          resultId: id
+      });
 
   if (!container) return;
 
