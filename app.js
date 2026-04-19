@@ -1,4 +1,4 @@
-const API_URL = "https://script.google.com/macros/s/AKfycbwqhVdCcPsgyamYkokESh5A95i5JQxqVAX2OKo83t6GtLLHaSpFOhGY1CIim_SUZtg2/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbyy0zS-6v3eC3Lkh3Bb1G0muKGqR2kuqAE5kDXR2B27r0aJFy6KjyXDn-kauI9B7Bya/exec";
 
 
 
@@ -2338,37 +2338,41 @@ const existing = (globalData.schedule || []).find(r =>
   new Date(r.date).toDateString() === new Date(date).toDateString()
 );
 
-const payload = {
-  action: "saveFullScheduleDay",
-  date: formattedDate,
-  day: dayNum,
+// 🔥 BUILD PARTIAL CHANGES INSTEAD OF FULL PAYLOAD
+const changes = [];
 
-  // 🔥 KEEP OLD IF NOT EDITED
-  p1: days[date].names[0] || existing?.players?.[0] || "",
-  p2: days[date].names[1] || existing?.players?.[1] || "",
-  p3: days[date].names[2] || existing?.players?.[2] || "",
-  p4: days[date].names[3] || existing?.players?.[3] || "",
+// 🔥 LOOP THROUGH pending changes (THIS is your source of truth)
+pendingScheduleChanges.forEach(c => {
+  if (c.date !== date) return;
 
-s1: days[date].status[0] !== undefined
-  ? days[date].status[0]
-  : (existing?.status?.[0] ?? 0),
-
-s2: days[date].status[1] !== undefined
-  ? days[date].status[1]
-  : (existing?.status?.[1] ?? 0),
-
-s3: days[date].status[2] !== undefined
-  ? days[date].status[2]
-  : (existing?.status?.[2] ?? 0),
-
-s4: days[date].status[3] !== undefined
-  ? days[date].status[3]
-  : (existing?.status?.[3] ?? 0),
-};
-    console.log("📤 sending:", payload);
-
-    await callAPI(payload);
+  if (c.type === "status") {
+    changes.push({
+      field: `s${c.col}`,
+      value: c.status
+    });
   }
+
+  if (c.type === "name") {
+    changes.push({
+      field: `p${c.col}`,
+      value: c.name
+    });
+  }
+});
+
+// 🔥 NOTHING CHANGED → SKIP API CALL
+if (!changes.length) return;
+
+// 🔥 NEW PAYLOAD (ONLY CHANGED FIELDS)
+const payload = {
+  action: "updateSchedulePartial",
+  date: formattedDate,
+  changes: JSON.stringify(changes)
+};
+
+console.log("📤 sending:", payload);
+
+await callAPI(payload);
 
   pendingScheduleChanges = [];
   scheduleDirty = false;
