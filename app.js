@@ -1,4 +1,4 @@
-const API_URL = "https://script.google.com/macros/s/AKfycbwhV9ztBsWm64iF847xTYsD0oMWNkopXtgUrDSVDzc8mnjpeEQiQFIz7A71igeTfJX5/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycby1-35fyTjBREKsYDQhNT3JMHrcoo9TKlRvHHKy86sNFf2eAQ97Nme9tT-KMnQYy-FK/exec";
 
 
 
@@ -1000,7 +1000,9 @@ async function loadSchedule() {
     maybeRollScheduleLocalWeek();
     console.log("🚀 loadSchedule called");
 
-    let data = globalData.schedule;
+    let data = await callAPI({ action: "getSchedule" }, { force: true });
+    globalData.schedule = data;
+
     console.log("📦 schedule data:", data);
     console.count("loadSchedule fired");
 
