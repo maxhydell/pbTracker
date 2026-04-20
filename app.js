@@ -1,4 +1,4 @@
-const API_URL = "https://script.google.com/macros/s/AKfycbwThJE3rCIrxbp3KlMqmGeoQF2RH-9jb42DIQmEQqCXY2-e9l2MonhiZTStBaVADmdj/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbxsNRTm1AmuQ_Q_wsErBL5vhLZlyS9q-wo-_b6naifCHHx_fZWUV75JB_S0s3Ds4IA/exec";
 
 
 
@@ -1012,12 +1012,20 @@ async function loadSchedule() {
       return;
     }
 
-    const weekStart = startOfDay(effectiveScheduleWeekMonday());
+const weekStart = startOfDay(effectiveScheduleWeekMonday());
 
-    data = data.filter(row => {
-      const rd = startOfDay(new Date(row.date));
-      return !isNaN(rd.getTime()) && rd.getTime() >= weekStart.getTime();
-    });
+const weekEnd = new Date(weekStart);
+weekEnd.setDate(weekStart.getDate() + 4); // Friday
+
+data = data.filter(row => {
+  const rd = startOfDay(new Date(row.date));
+
+  return (
+    !isNaN(rd.getTime()) &&
+    rd.getTime() >= weekStart.getTime() &&
+    rd.getTime() <= weekEnd.getTime()
+  );
+});
 
     console.log("📊 SCHEDULE LENGTH:", data.length);
 
