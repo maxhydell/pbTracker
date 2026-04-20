@@ -1,4 +1,4 @@
-const API_URL = "https://script.google.com/macros/s/AKfycbw5T7ScyyySNo-0iWGzr1YAxSZpjb3gOKbUIUTO-VqNrQnBFNvAX1R5aPoy-1Y3DsFk/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbze_l_e9s0MN90lQ5pJLqIBQ3mTE10VIWDj-HM083K_u--KenciIXUl4w4MFtLO6xL2/exec";
 
 
 
@@ -1021,7 +1021,7 @@ data = Array.from({ length: 5 }, (_, i) => {
   target.setHours(0,0,0,0);
 
   const match = data.find(row => {
-    const rd = new Date(row.date + "T00:00:00");
+    const rd = new Date(row.date + "T12:00:00");
     rd.setHours(0,0,0,0);
     return rd.getTime() === target.getTime();
   });
@@ -1089,7 +1089,7 @@ data = Array.from({ length: 5 }, (_, i) => {
 
     container.innerHTML = data.map((row, i) => {
       console.log("Row:", row);
-      const d = new Date(row.date);
+      const d = new Date(row.date + "T12:00:00");
       const dayName = d.toLocaleDateString("en-US",{weekday:"long"});
 
       if (!data.length) {
