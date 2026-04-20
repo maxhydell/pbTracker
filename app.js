@@ -1015,15 +1015,22 @@ async function loadSchedule() {
 const weekStart = new Date(effectiveScheduleWeekMonday());
 weekStart.setHours(0,0,0,0);
 
-const weekEnd = new Date(weekStart);
-weekEnd.setDate(weekStart.getDate() + 4);
-weekEnd.setHours(0,0,0,0);
+data = Array.from({ length: 5 }, (_, i) => {
+  const target = new Date(weekStart);
+  target.setDate(weekStart.getDate() + i);
+  target.setHours(0,0,0,0);
 
-data = data.filter(row => {
-  const rd = new Date(row.date + "T00:00:00");
-  rd.setHours(0,0,0,0);
+  const match = data.find(row => {
+    const rd = new Date(row.date + "T00:00:00");
+    rd.setHours(0,0,0,0);
+    return rd.getTime() === target.getTime();
+  });
 
-  return rd >= weekStart && rd <= weekEnd;
+  return match || {
+    date: target.toISOString(),
+    players: ["", "", "", ""],
+    status: [0, 0, 0, 0]
+  };
 });
 
     console.log("📊 SCHEDULE LENGTH:", data.length);
