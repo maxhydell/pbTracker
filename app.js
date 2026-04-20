@@ -1012,19 +1012,18 @@ async function loadSchedule() {
       return;
     }
 
-const weekStart = startOfDay(effectiveScheduleWeekMonday());
+const weekStart = new Date(effectiveScheduleWeekMonday());
+weekStart.setHours(0,0,0,0);
 
 const weekEnd = new Date(weekStart);
-weekEnd.setDate(weekStart.getDate() + 4); // Friday
+weekEnd.setDate(weekStart.getDate() + 4);
+weekEnd.setHours(0,0,0,0);
 
 data = data.filter(row => {
-  const rd = startOfDay(new Date(row.date));
+  const rd = new Date(row.date + "T00:00:00");
+  rd.setHours(0,0,0,0);
 
-  return (
-    !isNaN(rd.getTime()) &&
-    rd.getTime() >= weekStart.getTime() &&
-    rd.getTime() <= weekEnd.getTime()
-  );
+  return rd >= weekStart && rd <= weekEnd;
 });
 
     console.log("📊 SCHEDULE LENGTH:", data.length);
