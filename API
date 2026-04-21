@@ -622,6 +622,19 @@ function ensureTodayGames() {
 
   if (sets.length > 0) return;
 
+  // 🔥 PREVENT DUPLICATE GENERATION
+  const props = PropertiesService.getScriptProperties();
+  const today = new Date().toDateString();
+  const key = "gamesGenerated_" + today;
+  
+  if (props.getProperty(key)) {
+    Logger.log("✅ Games already generated today, skipping");
+    return;
+  }
+  
+  // Mark that we're generating games
+  props.setProperty(key, "1");
+  
   handleGamesWeb();
 }
 

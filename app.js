@@ -1,4 +1,4 @@
-const API_URL = "https://script.google.com/macros/s/AKfycbze_l_e9s0MN90lQ5pJLqIBQ3mTE10VIWDj-HM083K_u--KenciIXUl4w4MFtLO6xL2/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbym9pKf1_59vx_txN5O9WR1di9H92kIs4pPzXfZ8PkQ7vdjqBkCyhMWYsKnJsY0VJTC/exec";
 
 
 
@@ -2349,11 +2349,10 @@ async function saveScheduleChanges() {
 
   // 🔥 STEP 2: send structured data
   for (const date in days) {
-    const d = new Date(date);
-
-    const dayNum = d.getDay() === 0 ? 7 : d.getDay();
-
-    const formattedDate = `${d.getMonth()+1}/${d.getDate()}/${d.getFullYear()}`;
+    // 🔥 FIX: Extract date directly from ISO string to avoid timezone offset issues
+    const dateParts = date.split("T")[0].split("-"); // Extract "YYYY-MM-DD" part
+    const formattedDate = `${Number(dateParts[1])}/${Number(dateParts[2])}/${dateParts[0]}`; // Convert to M/D/YYYY
+    const dayNum = new Date(date).getDay() === 0 ? 7 : new Date(date).getDay();
 
 // 🔥 get original row
 const existing = (globalData.schedule || []).find(r =>
