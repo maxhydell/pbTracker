@@ -1,4 +1,4 @@
-const API_URL = "https://script.google.com/macros/s/AKfycbym9pKf1_59vx_txN5O9WR1di9H92kIs4pPzXfZ8PkQ7vdjqBkCyhMWYsKnJsY0VJTC/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbyQNXSaQSNUFnP1xKzkOL6h8PRSytv0eg0PUDEj61oP8qfq-0oQw9Ik8HjYCdsFmDw/exec";
 
 
 
@@ -999,6 +999,9 @@ async function loadSchedule() {
     setWeekRange();
     maybeRollScheduleLocalWeek();
     console.log("🚀 loadSchedule called");
+
+    // 🔥 ENSURE WEEK STRUCTURE EXISTS BEFORE LOADING
+    await callAPI({ action: "ensureWeekInitialized" });
 
     let data = await callAPI({ action: "getSchedule" }, { force: true });
     globalData.schedule = data;
@@ -2348,19 +2351,16 @@ async function saveScheduleChanges() {
   });
 
   // 🔥 STEP 2: send structured data
+  let hasErrors = false;
+  let errorMessages = [];
+
   for (const date in days) {
     // 🔥 FIX: Extract date directly from ISO string to avoid timezone offset issues
     const dateParts = date.split("T")[0].split("-"); // Extract "YYYY-MM-DD" part
     const formattedDate = `${Number(dateParts[1])}/${Number(dateParts[2])}/${dateParts[0]}`; // Convert to M/D/YYYY
-    const dayNum = new Date(date).getDay() === 0 ? 7 : new Date(date).getDay();
 
-// 🔥 get original row
-const existing = (globalData.schedule || []).find(r =>
-  new Date(r.date).toDateString() === new Date(date).toDateString()
-);
-
-// 🔥 BUILD PARTIAL CHANGES INSTEAD OF FULL PAYLOAD
-const changes = [];
+    // 🔥 BUILD PARTIAL CHANGES INSTEAD OF FULL PAYLOAD
+    const changes = [];
 
 // 🔥 LOOP THROUGH pending changes (THIS is your source of truth)
 pendingScheduleChanges.forEach(c => {
@@ -2393,13 +2393,52 @@ const payload = {
 
 console.log("📤 sending:", payload);
 
-await callAPI(payload);
+const response = await callAPI(payload);
+
+// 🔥 CHECK FOR ERRORS
+if (response && response.error) {
+  hasErrors = true;
+  errorMessages.push(`❌ Failed to save ${formattedDate}: ${response.error}`);
+  console.error("Save error:", response.error);
+}
 }
 
   pendingScheduleChanges = [];
   scheduleDirty = false;
 
   updateSaveButton();
+
+  // 🔥 SHOW ERROR MESSAGE IF ANY FAILED
+  if (hasErrors) {
+    const errorBox = document.createElement("div");
+    errorBox.className = "error-notification";
+    errorBox.style.cssText = `
+      position: fixed;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background-color: #ff6b6b;
+      color: white;
+      padding: 16px 24px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      z-index: 10000;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+      max-width: 90%;
+      word-wrap: break-word;
+    `;
+    errorBox.innerText = errorMessages.join("\n");
+    document.body.appendChild(errorBox);
+
+    setTimeout(() => {
+      errorBox.style.opacity = "0";
+      errorBox.style.transition = "opacity 0.3s ease-out";
+      setTimeout(() => errorBox.remove(), 300);
+    }, 4000);
+
+    return;
+  }
 
   console.log("✅ Schedule saved to sheet");
 }

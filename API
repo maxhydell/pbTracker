@@ -30,6 +30,9 @@ function doGet(e) {
       ensureTodayGames();
       result = getTodaySets();
     }
+    if (action === "ensureWeekInitialized") {
+      result = initializeWeekSchedule();
+    }
     if (action === "lastUpdated") {
       const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
       const sheet = ss.getSheetByName("Meta");
@@ -430,6 +433,80 @@ pairs.forEach((p, i) => {
 
 
 
+function initializeWeekSchedule() {
+  const sheet = SpreadsheetApp
+    .openById(SPREADSHEET_ID)
+    .getSheetByName("Schedule");
+
+  const tz = Session.getScriptTimeZone();
+
+  const now = new Date();
+  const today = new Date(
+    Utilities.formatDate(now, tz, "yyyy-MM-dd") + "T00:00:00"
+  );
+  const day = today.getDay();
+
+  // ✅ Calculate Monday of this week (or next if weekend)
+  const diffToMonday =
+    (day === 0 || day === 6)
+      ? (day === 0 ? 1 : 2)
+      : 1 - day;
+
+  const monday = new Date(today);
+  monday.setDate(today.getDate() + diffToMonday);
+  monday.setHours(0, 0, 0, 0);
+
+  const all = sheet.getDataRange().getValues();
+
+  // 🔍 Check if this week already exists
+  for (let i = 1; i < all.length; i++) {
+    const rowDate = new Date(all[i][0]);
+    if (isNaN(rowDate)) continue;
+    rowDate.setHours(0, 0, 0, 0);
+
+    if (rowDate.getTime() === monday.getTime()) {
+      Logger.log("✅ Week already initialized");
+      return { success: true, created: false };
+    }
+  }
+
+  // ❗ Find next BLANK row to start new week block
+  let insertIndex = all.length + 1; // Default to end
+
+  for (let i = 1; i < all.length; i++) {
+    if (!all[i][0] || all[i][0] === "") {
+      insertIndex = i + 1; // 1-indexed for sheet
+      break;
+    }
+  }
+
+  Logger.log("📅 Initializing week at row " + insertIndex);
+  Logger.log("Monday: " + monday);
+
+  // 🔥 INSERT MON-FRI in one go
+  const rows = [];
+  for (let i = 0; i < 5; i++) {
+    const d = new Date(monday);
+    d.setDate(monday.getDate() + i);
+    const dayNum = i + 1; // 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri
+
+    const dateStr = Utilities.formatDate(d, tz, "M/d/yyyy");
+
+    rows.push([
+      dateStr,
+      dayNum,
+      "", "", "", "",
+      "",
+      0, 0, 0, 0
+    ]);
+  }
+
+  sheet.getRange(insertIndex, 1, rows.length, 11).setValues(rows);
+
+  Logger.log("✅ Week initialized");
+  return { success: true, created: true };
+}
+
 function updateSchedulePartial(data) {
   const sheet = SpreadsheetApp
     .openById(SPREADSHEET_ID)
@@ -446,14 +523,12 @@ function updateSchedulePartial(data) {
   );
   incomingDate.setHours(0, 0, 0, 0);
 
-  const dayNum = incomingDate.getDay() === 0 ? 7 : incomingDate.getDay(); // Mon=1
-
   Logger.log("🔥 PARTIAL UPDATE");
   Logger.log("Date: " + data.date);
 
   let targetRow = -1;
 
-  // 🔍 FIND EXISTING ROW
+  // 🔍 FIND EXISTING ROW (NO CREATION LOGIC)
   for (let i = 1; i < all.length; i++) {
     const rowDate = new Date(all[i][0]);
     if (isNaN(rowDate)) continue;
@@ -466,35 +541,10 @@ function updateSchedulePartial(data) {
     }
   }
 
-  // ❗ IF NOT FOUND → CREATE AT CORRECT POSITION
+  // ❌ If row not found, abort (week should be pre-initialized)
   if (targetRow === -1) {
-    Logger.log("⚠️ Creating new row");
-
-    // Find correct position (Mon–Fri order)
-    let insertIndex = 2; // default after header
-
-    for (let i = 1; i < all.length; i++) {
-      const rowDay = Number(all[i][1]) || 0;
-
-      if (rowDay > dayNum) {
-        insertIndex = i + 1;
-        break;
-      }
-
-      insertIndex = i + 2;
-    }
-
-    sheet.insertRowBefore(insertIndex);
-
-    sheet.getRange(insertIndex, 1, 1, 11).setValues([[
-      data.date,
-      dayNum,
-      "", "", "", "",
-      "",
-      0, 0, 0, 0
-    ]]);
-
-    targetRow = insertIndex;
+    Logger.log("❌ Date row not found. Call ensureWeekInitialized first.");
+    return { error: "Date not found in schedule" };
   }
 
   // 🔥 column mapping
