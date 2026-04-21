@@ -1507,8 +1507,7 @@ function buildResultsHtml(standings, morningPcts, afterTrend) {
   const rows = standings.map((s, i) => {
     const trendRow = (afterTrend || []).find(p => p.name.toLowerCase() === s.key);
     const afterPct = trendRow ? Number(trendRow.winPct) : 0;
-    const beforePct =
-      morningPcts && morningPcts[s.key] != null ? Number(morningPcts[s.key]) : afterPct;
+    const beforePct = s.prevWinPct != null ? Number(s.prevWinPct) : afterPct;
     const delta = (afterPct - beforePct) * 100;
     const deltaStr = `${delta >= 0 ? "+" : ""}${delta.toFixed(2)}%`;
     const cls = delta >= 0 ? "delta-pos" : "delta-neg";
@@ -1561,11 +1560,11 @@ async function finishDay() {
 const tempShareId = Math.random().toString(36).substring(2, 10);
 
 // 🔥 4. SAVE WITH ID + DATA (NO LONGER USED — SAFE BUT DOES NOTHING IMPORTANT)
-await callAPI({
-  action: "saveHistory",
-  resultId: tempShareId,
-  data: JSON.stringify(results_initial)
-});
+// await callAPI({
+//  action: "saveHistory",
+ // resultId: tempShareId,
+ // data: JSON.stringify(final)
+// });
 
 // 🔥 5. BUILD SHARE URL (TEMP — NOT USED)
 const tempShareUrl = `${window.location.origin}${getSiteBasePath()}share/?r=${tempShareId}`;
@@ -1620,17 +1619,24 @@ if (window.OneSignal && !localStorage.getItem("notifAsked")) {
     });
   });
 
-  // ===== ADD % CHANGE =====
-const morning = getMorningWinPctSnapshot(globalData.trend || before || []);
+  // ===== SAVE HISTORY TO BACKEND =====
+  await callAPI({ action: "saveHistory" });
 
-const final = Object.keys(results).map(name => {
+  // ===== FETCH PREVIOUS HISTORY FOR EACH PLAYER =====
+  const previousHistoryMap = {};
+  for (const name of Object.keys(results)) {
+    const prev = await callAPI({
+      action: "getPreviousHistoryEntry",
+      name: name
+    });
+    previousHistoryMap[name] = prev;
+  }
 
-  const base = morning[name.toLowerCase()] || 0;
-
-  const afterP =
-    after.find(p => p.name.toLowerCase() === name)?.winPct || 0;
-
-  const change = Number(((afterP - base) * 100).toFixed(2));
+  // ===== ADD % CHANGE (comparing to PREVIOUS history entry) =====
+  const final = Object.keys(results).map(name => {
+    const previous = previousHistoryMap[name] || { winPct: 0, pointsAvg: 0 };
+    const afterP = after.find(p => p.name.toLowerCase() === name)?.winPct || 0;
+    const change = Number(((afterP - previous.winPct) * 100).toFixed(2));
 
     return {
       name,
@@ -1665,7 +1671,7 @@ await callAPI({
 });
 
   localStorage.setItem(`pbTracker_results_${todayKey()}`, buildResultsHtml(
-    final.map(x => ({ ...x, key: x.name.toLowerCase(), displayName: x.name })),
+    final.map(x => ({ ...x, key: x.name.toLowerCase(), displayName: x.name, prevWinPct: previousHistoryMap[x.name]?.winPct || 0 })),
     getMorningWinPctSnapshot(globalData.trend || before || []),
     after || []
   ));
