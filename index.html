@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" href="logo.png">
+<link rel="apple-touch-icon" href="logo.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Pickleball Tracker</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Anton&family=Open+Sans:ital,wght@0,700;1,700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Pacifico&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<!-- ✅ OneSignal HERE -->
+<script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" defer></script>
+<script>
+  window.OneSignalDeferred = window.OneSignalDeferred || [];
+  OneSignalDeferred.push(async function(OneSignal) {
+    await OneSignal.init({
+      appId: "438a52af-ebf7-4793-a690-cbeee4f8606f",
+    });
+  });
+</script>
+
+</head>
+
+<body>
+<!-- 🔥 REMOVE OVERLAY COMPLETELY -->
+<!-- <div id="overlay" class="overlay" onclick="toggleMenu()"></div> -->
+
+<!-- LOADING SCREEN -->
+<div id="loading-screen">
+  <div class="loading-text">
+    <span class="word1">PICKLEBALL</span>
+    <span class="word2">TRACKER</span>
+    <img class="ball" src="pickleball.png">
+  </div>
+</div>
+
+
+
+
+<!-- APP -->
+<div class="app">
+
+  <div class="top-bar">
+    <div class="menu-btn" onclick="toggleMenu()">☰</div>
+    <div class="title">Pickleball Tracker</div>
+  </div>
+
+  <div id="sideMenu" class="side-menu">
+
+    <div class="menu-top">
+      <button onclick="navigate('input')">🏠 Dashboard</button>
+      <button onclick="navigate('rankings')">📊 Rankings</button>
+      <button onclick="navigate('schedule')">📅 Schedule</button>
+      <button onclick="navigate('sets')">🎾 Sets</button>
+    </div>
+
+    <div class="menu-bottom">
+      <button onclick="openShare()">📤 Share</button>
+    </div>
+
+
+  </div>
+  <!-- PAGES -->
+  <div id="input" class="page active">
+    <h2 id="greetingText"></h2>
+    <div id="playerOnboard" class="player-onboard" style="display:none;"></div>
+
+    <div class="card analytics-card-outer">
+     <div id="dashboardAnalytics"></div>
+     <div id="dashboardAnalyticsTables" class="analytics-tables-stack"></div>
+    </div>
+
+    <h2 class="section-heading-dashboard">Today's sets</h2>
+    <div id="setsContainer"></div>
+
+    <div class="card" id="doneCard">
+      <button type="button" id="doneBtn" onclick="finishDay()">DONE</button>
+      <div id="dayResults" class="day-results" style="display:none;"></div>
+      <div id="dayStats"></div>
+      <button type="button" id="revertDayBtn" class="revert-day-btn" style="display:none;" onclick="revertDay()">Revert day</button>
+    </div>
+  </div>
+
+  <div id="rankings" class="page">
+    <div class="rank-card">
+      <div class="rank-header">
+        <div>
+          <h2>Rankings</h2>
+          <p> </p>
+          <div class="form-control">
+            <label class="label">
+              <span class="label-text font-medium">Player</span>
+            </label>
+            <div class="block">
+              <select id="playerSelect" class="select select-bordered" onchange="onRankingsPlayerChange()"></select>
+            </div>
+          </div>
+        </div>
+        <div class="rank-score">
+          <div id="bigStat">--</div>
+          <p id="topPercent">Top --%</p>
+          <div id="analytics"></div>
+        </div>
+      </div>
+
+      <p class="sub">Last 90 days</p>
+
+      <canvas id="chart"></canvas>
+      <div id="leaderboard"></div>
+      <div id="rankingsAnalytics"></div>
+      <div id="rankingsAnalyticsTables" class="analytics-tables-stack"></div>
+    </div>
+  </div>
+
+  <div id="schedule" class="page">
+    <h1>Schedule</h1>
+
+    <div id="addModal" class="modal" style="display:none;">
+      <div class="modal-content">
+        <input id="newName" placeholder="Name">
+        <input id="newPhone" placeholder="Phone">
+        <input id="newRating" placeholder="Rating">
+        <div class="modal-actions">
+          <button onclick="submitNewPlayer()">Add</button>
+          <button onclick="document.getElementById('addModal').style.display='none'">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="schedule-header">
+      <div>
+        <h2>This Week</h2>
+        <div class="week-range" id="weekRange">4/6 - 4/10</div>
+      </div>
+
+      <div class="add-player-btn" onclick="openAddPlayer()">
+        + Add Player
+      </div>
+    </div>
+
+    <div id="scheduleList"></div>
+    <div id="scheduleSaveWrap">
+      <button id="scheduleSaveBtn" onclick="saveScheduleChanges()">
+        Save
+      </button>
+    </div>
+   </div>
+
+
+
+  <div id="sets" class="page">
+    <h1>Current Sets</h1>
+    <div id="setsList"></div>
+  </div>
+
+
+
+
+
+
+</div> <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,1297 @@
+
+
+// ===== MAIN API ENTRY =====
+function doGet(e) {
+  try {
+
+    if (!e || !e.parameter) {
+      Logger.log("❌ doGet called without parameters");
+      return ContentService
+        .createTextOutput(JSON.stringify({ error: "No parameters" }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+
+    const action = (e.parameter.action || "").trim();
+
+    // 🔥 ADD THESE LOGS RIGHT HERE
+    Logger.log("🔥 doGet HIT");
+    Logger.log("ACTION:", action);
+    Logger.log("PARAMS:", JSON.stringify(e.parameter));
+
+
+    let result = {};
+
+    if (action === "getAllData") {
+       return ContentService.createTextOutput(
+        JSON.stringify(getAllData())
+      );
+    }
+    if (action === "getTodaySets") {
+      ensureTodayGames();
+      result = getTodaySets();
+    }
+    if (action === "lastUpdated") {
+      const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+      const sheet = ss.getSheetByName("Meta");
+
+      if (!sheet) {
+        return json({ error: "Meta sheet missing" });
+      }
+
+      return ContentService.createTextOutput(
+        JSON.stringify(sheet.getRange("A1").getValue())
+      );
+    }
+    else if (action === "saveSetFull") {
+      result = saveSetFull(e.parameter);
+
+      if (result && result.success) {
+        updateLastUpdated();
+      }
+    }
+    else if (action === "getUserTrend") result = getUserTrend();
+    else if (action === "getSchedule") result = getSchedule();
+    else if (action === "addPlayer") result = addPlayer(e.parameter);
+    else if (action === "updateSchedule") result = updateSchedule(e.parameter);
+    else if (action === "getPlayers") result = getPlayers();
+    else if (action === "saveFullScheduleDay") result = saveFullScheduleDay(e.parameter);
+    else if (action === "updateSchedulePartial") result = updateSchedulePartial(e.parameter);
+    else if (action === "sendSaveNotification") result = sendSaveNotification();
+    else if (action === "updatePlayerStatus") result = updatePlayerStatus(e.parameter);
+    else if (action === "saveSharedResult") result = saveSharedResult(e.parameter);
+    else if (action === "getSharedResult") result = getSharedResult(e.parameter);
+    else if (action === "saveHistory") result = saveHistory();
+    else if (action === "getHistory") result = getHistory();
+    else if (action === "getPreviousHistoryEntry") result = getPreviousHistoryEntry(e.parameter);
+    else if (action === "getAllSets") result = getAllSets();
+    return ContentService
+      .createTextOutput(JSON.stringify(result))
+      .setMimeType(ContentService.MimeType.JSON);
+
+  } catch (err) {
+    return ContentService
+      .createTextOutput(JSON.stringify({ error: err.toString() }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+
+function saveSetFull(data) {
+    try {
+
+  Logger.log("🔥 saveSetFull START");
+Logger.log(JSON.stringify(data));
+  const setNum = Number(data.set);
+  const newScores = JSON.parse(data.scores || "[]");
+
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const sheet = ss.getSheetByName("Sets");
+  const rankingsSheet = ss.getSheetByName("Rankings");
+
+  const all = sheet.getDataRange().getValues();
+
+  const todayStr = new Date().toDateString();
+
+  for (let i = 1; i < all.length; i++) {
+    const rowDate = new Date(all[i][0]);
+    if (isNaN(rowDate)) continue;
+
+const rowDateStr = Utilities.formatDate(new Date(all[i][0]), ss.getSpreadsheetTimeZone(), "yyyy-MM-dd");
+const todayDateStr = Utilities.formatDate(new Date(), ss.getSpreadsheetTimeZone(), "yyyy-MM-dd");
+
+if (rowDateStr === todayDateStr && Number(all[i][1]) === setNum) {
+      const teamA = all[i][2].split("/").map(p => p.trim());
+      const teamB = all[i][3].split("/").map(p => p.trim());
+
+      const changes = {};
+
+      // helper
+      function addChange(player, wins, points, games) {
+        const key = player.toLowerCase();
+
+        if (!changes[key]) {
+          changes[key] = { wins: 0, points: 0, games: 0 };
+        }
+
+        changes[key].wins += wins;
+        changes[key].points += points;
+        changes[key].games += games;
+      }
+
+      // 🔥 LOOP ALL 3 GAMES
+// 🔥 GET FULL ROW ONCE
+const rowValues = sheet.getRange(i + 1, 1, 1, sheet.getLastColumn()).getValues()[0];
+
+// 🔥 LOOP ALL 3 GAMES
+// 🔥 LOOP ALL GAMES (supports Game 4+)
+for (let g = 0; g < newScores.length; g++) {
+
+  const oldScore = rowValues[4 + g] || "";
+  const newScore = newScores[g] || "";
+
+  // only update if changed
+  if (oldScore !== newScore) {
+    rowValues[4 + g] = newScore;
+  }
+
+
+  // REMOVE old
+  if (oldScore && oldScore.includes("-")) {
+    const [aOld, bOld] = oldScore.split("-").map(Number);
+    const aWon = aOld > bOld;
+
+    teamA.forEach(p => addChange(p, aWon ? -1 : 0, -aOld, -1));
+    teamB.forEach(p => addChange(p, !aWon ? -1 : 0, -bOld, -1));
+  }
+
+  // ADD new
+  if (newScore && newScore.includes("-")) {
+    const [aNew, bNew] = newScore.split("-").map(Number);
+    const aWon = aNew > bNew;
+
+    teamA.forEach(p => addChange(p, aWon ? 1 : 0, aNew, 1));
+    teamB.forEach(p => addChange(p, !aWon ? 1 : 0, bNew, 1));
+  }
+
+  // ✅ UPDATE IN MEMORY
+  rowValues[4 + g] = newScore;
+}
+
+// 🔥 ONE WRITE ONLY
+sheet.getRange(i + 1, 1, 1, rowValues.length).setValues([rowValues]);
+
+// 🔥 APPLY BATCH UPDATES TO RANKINGS
+const rData = rankingsSheet.getDataRange().getValues();
+
+let redFlags = [];
+
+Object.keys(changes).forEach(playerKey => {
+  const change = changes[playerKey];
+
+  for (let r = 1; r < rData.length; r++) {
+    const name = (rData[r][0] || "").toLowerCase();
+
+    if (name === playerKey) {
+
+      const currentWins = Number(rData[r][3]) || 0;
+      const currentPoints = Number(rData[r][4]) || 0;
+      const currentGames = Number(rData[r][5]) || 0;
+
+      const newWins = currentWins + change.wins;
+      const newPoints = currentPoints + change.points;
+      const newGames = currentGames + change.games;
+
+      // 🚨 RED FLAG CHECK
+if (
+  newWins < 0 ||
+  newPoints < 0 ||
+  newGames < 0
+) {
+  redFlags.push(playerKey);
+}
+
+      // ✅ APPLY IN MEMORY (NOT SHEET)
+      rData[r][3] = Math.max(0, newWins);
+      rData[r][4] = Math.max(0, newPoints);
+      rData[r][5] = Math.max(0, newGames);
+
+      break;
+    }
+  }
+});
+
+// 🚨 STOP if bad data (BEFORE writing)
+if (redFlags.length > 0) {
+  Logger.log("🚨 RED FLAG PLAYERS: " + redFlags.join(", "));
+  return {
+    error: "Ranking inconsistency detected",
+    players: redFlags
+  };
+}
+
+// 🔥 ONE WRITE ONLY (THIS FIXES YOUR LAG)
+rankingsSheet
+  .getRange(1, 1, rData.length, rData[0].length)
+  .setValues(rData);
+
+      // ===== UPDATE I–L =====
+      const players = [...teamA, ...teamB];
+
+      const totals = {};
+      players.forEach(p => totals[p] = { wins: 0, points: 0 });
+
+      newScores.forEach(s => {
+        if (!s || !s.includes("-")) return;
+
+        const [a, b] = s.split("-").map(Number);
+
+        teamA.forEach(p => {
+          totals[p].points += a;
+          if (a > b) totals[p].wins++;
+        });
+
+        teamB.forEach(p => {
+          totals[p].points += b;
+          if (b > a) totals[p].wins++;
+        });
+      });
+
+      sheet.getRange(1, 9, 1, 4).setValues([players]);
+      sheet.getRange(2, 9, 1, 4)
+           .setValues([players.map(p => totals[p].wins)]);
+      sheet.getRange(3, 9, 1, 4)
+           .setValues([players.map(p => totals[p].points)]);
+
+      return { success: true };
+    }
+  }
+
+  return { success: false, debug: "Reached end unexpectedly" };
+
+
+  } catch (err) {
+    Logger.log("❌ ERROR: " + err.toString());
+    return { error: err.toString() };
+  }
+}
+
+
+
+function saveFullScheduleDay(data) {
+  const sheet = SpreadsheetApp
+    .openById(SPREADSHEET_ID)
+    .getSheetByName("Schedule");
+
+  const all = sheet.getDataRange().getValues();
+
+  const parts = data.date.split("/");
+  const incomingDate = new Date(
+    Number(parts[2]), // year
+    Number(parts[0]) - 1, // month (0-based)
+    Number(parts[1]) // day
+  );
+  incomingDate.setHours(0,0,0,0);
+
+  Logger.log("🔥 SAVE CALLED");
+  Logger.log("Incoming date: " + data.date);
+
+  // 🔍 TRY TO FIND EXISTING ROW
+  for (let i = 1; i < all.length; i++) {
+    const rowDate = new Date(all[i][0]);
+    if (isNaN(rowDate)) continue;
+    rowDate.setHours(0,0,0,0);
+
+    if (rowDate.getTime() === incomingDate.getTime()) {
+      Logger.log("✅ MATCH FOUND at row " + (i + 1));
+
+const existingRow = all[i];
+
+sheet.getRange(i + 1, 1, 1, 11).setValues([[
+  data.date,
+  Number(data.day),
+
+  data.p1 !== undefined ? data.p1 : existingRow[2],
+  data.p2 !== undefined ? data.p2 : existingRow[3],
+  data.p3 !== undefined ? data.p3 : existingRow[4],
+  data.p4 !== undefined ? data.p4 : existingRow[5],
+
+  "",
+
+  data.s1 !== undefined ? Number(data.s1) : existingRow[7],
+  data.s2 !== undefined ? Number(data.s2) : existingRow[8],
+  data.s3 !== undefined ? Number(data.s3) : existingRow[9],
+  data.s4 !== undefined ? Number(data.s4) : existingRow[10],
+]]);
+
+      return { success: true, updated: true };
+    }
+  }
+
+  // ❗ IF NOT FOUND → APPEND
+  Logger.log("⚠️ NO MATCH — APPENDING NEW ROW");
+
+  sheet.appendRow([
+    data.date,
+    Number(data.day),
+    data.p1 || "",
+    data.p2 || "",
+    data.p3 || "",
+    data.p4 || "",
+    "",
+    Number(data.s1) || 0,
+    Number(data.s2) || 0,
+    Number(data.s3) || 0,
+    Number(data.s4) || 0
+  ]);
+
+  return { success: true, created: true };
+}
+
+
+function getAllData() {
+  ensureTodayGames();
+
+  return {
+    sets: getTodaySets(),
+    trend: getUserTrend(),
+    schedule: getSchedule(),
+    history: getHistory(),
+    lastUpdated: getLastUpdated()
+  };
+}
+
+function updateLastUpdated() {
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const sheet = ss.getSheetByName("Meta");
+
+  if (!sheet) {
+    Logger.log("❌ Meta sheet not found");
+    return;
+  }
+
+  sheet.getRange("A1").setValue(new Date().toISOString());
+}
+function getLastUpdated() {
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const sheet = ss.getSheetByName("Meta");
+
+  if (!sheet) return null;
+
+  return sheet.getRange("A1").getValue();
+}
+
+
+// ===== JSON RESPONSE =====
+function json(data) {
+  return ContentService
+    .createTextOutput(JSON.stringify(data))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function generateGamesFromSchedule() {
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+
+  const schedule = ss.getSheetByName("Schedule");
+  const sets = ss.getSheetByName("Sets");
+
+  const data = schedule.getDataRange().getValues();
+
+  const today = new Date();
+  const todayStr = today.toDateString();
+
+  const todayRow = data.find(r => {
+    const d = new Date(r[0]);
+    d.setHours(0,0,0,0);
+    return d.getTime() === today.getTime();
+  });
+
+  if (!todayRow) return;
+
+  const players = todayRow.slice(2, 6).filter(Boolean);
+
+  if (players.length < 4) return;
+
+  // Simple pairing (can upgrade later)
+  const pairs = [
+    [players[0], players[1], players[2], players[3]],
+    [players[0], players[2], players[1], players[3]],
+    [players[0], players[3], players[1], players[2]]
+  ];
+
+const existing = sets.getDataRange().getValues();
+
+pairs.forEach((p, i) => {
+
+  const alreadyExists = existing.some(r => {
+    const d = new Date(r[0]);
+    d.setHours(0,0,0,0);
+
+    const today = new Date();
+    today.setHours(0,0,0,0);
+
+    return (
+      d.getTime() === today.getTime() &&
+      Number(r[1]) === (i + 1)
+    );
+  });
+
+  if (alreadyExists) return; // 🚫 STOP DUPLICATE
+// flag
+  sets.appendRow([
+    today,
+    i + 1,
+    `${p[0]} / ${p[1]}`,
+    `${p[2]} / ${p[3]}`,
+    "", "", ""
+  ]);
+});
+}
+
+
+
+
+function updateSchedulePartial(data) {
+  const sheet = SpreadsheetApp
+    .openById(SPREADSHEET_ID)
+    .getSheetByName("Schedule");
+
+  const all = sheet.getDataRange().getValues();
+  const changes = JSON.parse(data.changes || "[]");
+
+  const parts = data.date.split("/");
+  const incomingDate = new Date(
+    Number(parts[2]),
+    Number(parts[0]) - 1,
+    Number(parts[1])
+  );
+  incomingDate.setHours(0, 0, 0, 0);
+
+  const dayNum = incomingDate.getDay() === 0 ? 7 : incomingDate.getDay(); // Mon=1
+
+  Logger.log("🔥 PARTIAL UPDATE");
+  Logger.log("Date: " + data.date);
+
+  let targetRow = -1;
+
+  // 🔍 FIND EXISTING ROW
+  for (let i = 1; i < all.length; i++) {
+    const rowDate = new Date(all[i][0]);
+    if (isNaN(rowDate)) continue;
+
+    rowDate.setHours(0, 0, 0, 0);
+
+    if (rowDate.getTime() === incomingDate.getTime()) {
+      targetRow = i + 1;
+      break;
+    }
+  }
+
+  // ❗ IF NOT FOUND → CREATE AT CORRECT POSITION
+  if (targetRow === -1) {
+    Logger.log("⚠️ Creating new row");
+
+    // Find correct position (Mon–Fri order)
+    let insertIndex = 2; // default after header
+
+    for (let i = 1; i < all.length; i++) {
+      const rowDay = Number(all[i][1]) || 0;
+
+      if (rowDay > dayNum) {
+        insertIndex = i + 1;
+        break;
+      }
+
+      insertIndex = i + 2;
+    }
+
+    sheet.insertRowBefore(insertIndex);
+
+    sheet.getRange(insertIndex, 1, 1, 11).setValues([[
+      data.date,
+      dayNum,
+      "", "", "", "",
+      "",
+      0, 0, 0, 0
+    ]]);
+
+    targetRow = insertIndex;
+  }
+
+  // 🔥 column mapping
+  const colMap = {
+    p1: 3, p2: 4, p3: 5, p4: 6,
+    s1: 8, s2: 9, s3: 10, s4: 11
+  };
+
+  // 🔥 APPLY CHANGES
+  changes.forEach(change => {
+    const col = colMap[change.field];
+    if (!col) return;
+
+    const val =
+      typeof change.value === "string"
+        ? change.value.toLowerCase()
+        : change.value;
+
+    sheet.getRange(targetRow, col).setValue(val);
+  });
+
+  return { success: true };
+}
+
+
+
+
+
+function handleGamesWeb() {
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+
+  const scheduleSheet = ss.getSheetByName(SHEET_SCHEDULE);
+  const setsSheet = ss.getSheetByName(SHEET_SETS);
+
+  if (!scheduleSheet || !setsSheet) {
+    Logger.log("❌ Missing schedule or sets sheet");
+    return;
+  }
+
+
+  const todayStr = new Date().toDateString();
+  const scheduleData = scheduleSheet.getDataRange().getValues();
+
+  let players = null;
+
+  for (let i = 1; i < scheduleData.length; i++) {
+    if (new Date(scheduleData[i][0]).toDateString() === todayStr) {
+      players = scheduleData[i].slice(2, 6);
+      break;
+    }
+  }
+
+  if (!players || players.length < 4) return;
+
+  // 🚨 prevent duplicates
+  const existing = setsSheet.getDataRange().getValues().some(r =>
+    new Date(r[0]).toDateString() === todayStr
+  );
+
+  if (existing) return;
+
+  const now = Utilities.formatDate(
+    new Date(),
+    Session.getScriptTimeZone(),
+    "M/d/yyyy H:mm:ss"
+  );
+
+  const rows = [
+    [now, 1, `${players[0]} / ${players[1]}`, `${players[2]} / ${players[3]}`, "", "", ""],
+    [now, 2, `${players[0]} / ${players[3]}`, `${players[2]} / ${players[1]}`, "", "", ""],
+    [now, 3, `${players[0]} / ${players[2]}`, `${players[3]} / ${players[1]}`, "", "", ""]
+  ];
+
+  const startRow = setsSheet.getLastRow() + 1;
+
+  setsSheet.getRange(startRow, 1, rows.length, rows[0].length)
+    .setValues(rows);
+}
+
+// ===== GET TODAY'S SETS =====
+function getTodaySets() {
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const sheet = ss.getSheetByName("Sets");
+
+  if (!sheet) {
+    Logger.log("❌ Sets sheet missing");
+    return [];
+  }
+
+  const data = sheet.getDataRange().getValues();
+  
+const tz = Session.getScriptTimeZone();
+
+const todayStr = Utilities.formatDate(
+  new Date(),
+  tz,
+  "yyyy-MM-dd"
+);
+
+  return data.slice(1)
+    .filter(r => {
+        if (!r[0]) return false;
+const rowStr = Utilities.formatDate(
+  new Date(r[0]),
+  tz,
+  "yyyy-MM-dd"
+);
+
+return rowStr === todayStr;
+    })
+    .map(r => ({
+      set: r[1],
+      teamA: r[2],
+      teamB: r[3],
+      scores: [
+        r[4] || "",
+        r[5] || "",
+        r[6] || ""
+      ]
+    }));
+}
+
+function ensureTodayGames() {
+  const sets = getTodaySets();
+
+  if (sets.length > 0) return;
+
+  handleGamesWeb();
+}
+
+
+// ===== FORMAT SCORE =====
+function formatScore(r) {
+  const scores = [r[4], r[5], r[6]].filter(s => s && s !== "");
+  if (scores.length === 0) return "";
+  return scores.join(" ");
+}
+
+// ===== SUBMIT SCORE (LIVE UPDATE) =====
+function submitScore(data) {
+  let debug = [];
+  debug.push("submitScore called");
+  debug.push(JSON.stringify(data));
+  
+  const setNum = Number(data.set);
+  const game = Number(data.game); // 1,2,3
+  const score = data.score;
+
+
+  if (!score || !score.includes("-")) {
+    Logger.log("❌ Invalid score format:", score);
+    return { error: "Invalid score" };
+  }
+
+  const parts = score.split("-");
+  if (parts.length !== 2 || parts[0] === "" || parts[1] === "") {
+    Logger.log("❌ Incomplete score (skipping):", score);
+    return { success: true };
+  }
+
+
+  Logger.log("=== SUBMIT SCORE START ===");
+  Logger.log({ setNum, game, score });
+
+
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+
+  const sheet = ss.getSheetByName(SHEET_SETS);
+  const rankingsSheet = ss.getSheetByName("Rankings");
+
+  if (!sheet) {
+    Logger.log("❌ Sets sheet not found: " + SHEET_SETS);
+  return { error: "Sets sheet missing" };
+  }
+
+  if (!rankingsSheet) {
+    Logger.log("❌ Rankings sheet not found");
+    return { error: "Rankings sheet missing" };
+  }
+
+const all = sheet.getDataRange().getValues();
+
+const todayStr = new Date().toDateString(); // 🔥 SAME AS WORKING FUNCTION
+
+for (let i = 1; i < all.length; i++) {
+  const rowDate = new Date(all[i][0]);
+  if (isNaN(rowDate)) continue;
+
+  // 🔥 EXACT MATCH LOGIC (handles timestamps like 4/14/2026 10:48:45)
+  if (
+    rowDate.toDateString() === todayStr &&
+    Number(all[i][1]) === setNum
+  ) {
+
+      debug.push("MATCH FOUND row " + (i + 1));
+      debug.push("TeamA: " + all[i][2]);
+      debug.push("TeamB: " + all[i][3]);
+      const col = 5 + (Number(game) === 0 ? 0 : Number(game) - 1);  // E=5, F=6, G=7
+
+      const teamA = all[i][2].split("/").map(p => p.trim());
+      const teamB = all[i][3].split("/").map(p => p.trim());
+
+      const oldScore = sheet.getRange(i + 1, col).getValue();
+      debug.push("Old score: " + oldScore);
+      debug.push("New score: " + score);
+
+      Logger.log(`Writing → Row ${i+1}, Set ${setNum}, Game ${game}, Col ${col}, Score ${score}`);
+
+      // ===== REMOVE OLD SCORE EFFECT =====
+      if (typeof oldScore === "string" && oldScore.includes("-")) {
+        const [oldA, oldB] = oldScore.split("-").map(Number);
+        const oldWinnerA = oldA > oldB;
+
+        teamA.forEach(p => {
+          updatePlayerStats(p, oldWinnerA ? -1 : 0, -oldA, -1);
+        });
+
+        teamB.forEach(p => {
+          updatePlayerStats(p, !oldWinnerA ? -1 : 0, -oldB, -1);
+        });
+      }
+
+      // ===== WRITE NEW SCORE =====
+      sheet.getRange(i + 1, col).setNumberFormat("@STRING@");
+      sheet.getRange(i + 1, col).setValue(score);
+      const baseRow = i + 1;
+
+      // ===== GET PLAYERS =====
+      const players = [...teamA, ...teamB];
+
+      // ===== WRITE NAMES (SET 1) =====
+      if (setNum === 1) {
+        sheet.getRange(baseRow, 9, 1, 4)
+             .setValues([players]);
+      }
+
+      // ===== CALCULATE TOTALS =====
+      const totals = {};
+      players.forEach(p => {
+        totals[p] = {
+          wins: 0,
+          points: 0
+        };
+      });
+
+      
+
+      // ===== LOOP ALL 3 GAMES =====
+      for (let g = 0; g < 3; g++) {
+
+        const s = sheet.getRange(i + 1, 5 + g).getValue();
+
+        if (!s || !s.includes("-")) continue;
+
+        const [aScore, bScore] = s.split("-").map(Number);
+
+        teamA.forEach(p => {
+          totals[p].points += aScore;
+
+          if (aScore > bScore) {
+            totals[p].wins++;
+          }
+        });
+
+        teamB.forEach(p => {
+          totals[p].points += bScore;
+
+          if (bScore > aScore) {
+            totals[p].wins++;
+          }
+        });
+      }
+
+      // ===== SET 2 → WINS =====
+      if (setNum === 2) {
+
+        sheet.getRange(baseRow, 8)
+             .setValue("Wins");
+
+        sheet.getRange(baseRow, 9, 1, 4)
+             .setValues([
+               players.map(p => totals[p].wins)
+             ]);
+      }
+
+      // ===== SET 3 → POINTS =====
+      if (setNum === 3) {
+
+        sheet.getRange(baseRow, 8)
+             .setValue("Points");
+
+        sheet.getRange(baseRow, 9, 1, 4)
+             .setValues([
+               players.map(p => totals[p].points)
+             ]);
+      }     
+
+      // ===== APPLY NEW SCORE =====
+      const [a, b] = score.split("-").map(Number);
+      const winnerA = a > b;
+
+      teamA.forEach(p => {
+        updatePlayerStats(p, winnerA ? 1 : 0, a, 1);
+      });
+
+      teamB.forEach(p => {
+        updatePlayerStats(p, !winnerA ? 1 : 0, b, 1);
+      });
+
+      return { success: true, debug };
+    }
+  }
+
+  Logger.log("Writing score:", setNum, game, score);
+  Logger.log("❌ NO MATCH FOUND for set: " + setNum);
+  return { error: "Set not found", debug };
+}
+
+function updatePlayerStatus(data) {
+  const sheet = SpreadsheetApp.openById(SPREADSHEET_ID)
+    .getSheetByName("Schedule");
+
+  const date = new Date(data.date);
+  date.setHours(0,0,0,0);
+  const col = Number(data.col); // 1–4
+  const status = Number(data.status); // 1 or 2
+
+  const values = sheet.getDataRange().getValues();
+
+  for (let i = 1; i < values.length; i++) {
+    const d = new Date(values[i][0]);
+    d.setHours(0,0,0,0);
+
+    if (d.getTime() === date.getTime()) {
+      const sheetCol = 6 + col; // G–J
+      if (sheetCol < 7 || sheetCol > 10) return { error: "Invalid col" };
+
+      sheet.getRange(i + 1, sheetCol).setValue(status);
+      return { success: true };
+    }
+  }
+
+  return { error: "not found" };
+}
+
+
+
+function saveSharedResult(data) {
+  const sheet = SpreadsheetApp
+    .openById(SPREADSHEET_ID)
+    .getSheetByName("SharedResults");
+
+  if (!sheet) {
+    throw new Error("SharedResults sheet missing");
+  }
+
+  const resultId = data.resultId;
+  const json = data.data;
+
+  sheet.appendRow([
+    new Date(),
+    resultId,
+    json
+  ]);
+
+  return { success: true };
+}
+
+
+function getSharedResult(data) {
+  const sheet = SpreadsheetApp
+    .openById(SPREADSHEET_ID)
+    .getSheetByName("SharedResults");
+
+  if (!sheet) return [];
+
+  const resultId = data.resultId;
+
+  const rows = sheet.getDataRange().getValues();
+
+  for (let i = rows.length - 1; i >= 1; i--) {
+    if (rows[i][1] === resultId) {
+      try {
+        return JSON.parse(rows[i][2]);
+      } catch (e) {
+        return [];
+      }
+    }
+  }
+
+  return [];
+}
+
+
+
+
+
+function sendSaveNotification() {
+
+  const message = {
+    app_id: "438a52af-ebf7-4793-a690-cbeee4f8606f",
+    included_segments: ["All"],
+    headings: { en: "✅ Score Saved Successfully" },
+    contents: {
+      en: "A new game score was just recorded."
+    }
+  };
+
+  UrlFetchApp.fetch("https://onesignal.com/api/v1/notifications", {
+    method: "post",
+    contentType: "application/json",
+    headers: {
+      Authorization: "Basic os_v2_app_iofffl7l65dzhjuqzpxoj6dan4faqcnsgj7u32453a56mj43er62nblpiaxy5qjohlgk642geoeolckkdx5vjmydrhb3uti2h77ndfi"
+    },
+    payload: JSON.stringify(message)
+  });
+
+  return { success: true };
+}
+
+
+function saveHistory() {
+
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const rankings = ss.getSheetByName("Rankings");
+  const history = ss.getSheetByName("History");
+  const todayStr = new Date().toDateString();
+
+  const props = PropertiesService.getScriptProperties();
+  const key = "history_" + todayStr;
+
+  if (props.getProperty(key)) {
+    return { skipped: true };
+  }
+
+  props.setProperty(key, "1");
+
+  const data = rankings.getDataRange().getValues();
+  const rows = [];
+
+  data.slice(1).forEach(r => {
+    if (!r[0]) return;
+
+    const games = Number(r[5]) || 0;
+    if (games === 0) return;
+
+    rows.push([
+      new Date(),
+      r[0],
+      Number(r[6]) || 0,
+      Number(r[7]) || 0
+    ]);
+  });
+
+  if (rows.length) {
+    history.getRange(history.getLastRow() + 1, 1, rows.length, rows[0].length)
+           .setValues(rows);
+  }
+
+  return { success: true };
+}
+
+
+
+
+// PUSH NOTI
+
+function sendTomorrowReminders() {
+  const schedule = getSchedule();
+
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  tomorrow.setHours(0,0,0,0);
+
+  const game = schedule.find(d => {
+    const date = new Date(d.date);
+    date.setHours(0,0,0,0);
+    return date.getTime() === tomorrow.getTime();
+  });
+
+  if (!game) return;
+
+  const players = game.players.filter(Boolean);
+
+  const message = {
+    app_id: "438a52af-ebf7-4793-a690-cbeee4f8606f",
+    included_segments: ["All"],
+    headings: { en: "Reminder" },
+    contents: {
+      en: `Reminder, you are playing tomorrow!\nWith ${players.join(", ")}`
+    }
+  };
+
+  UrlFetchApp.fetch("https://onesignal.com/api/v1/notifications", {
+    method: "post",
+    contentType: "application/json",
+    headers: {
+      Authorization: "Basic os_v2_app_iofffl7l65dzhjuqzpxoj6dan4faqcnsgj7u32453a56mj43er62nblpiaxy5qjohlgk642geoeolckkdx5vjmydrhb3uti2h77ndfi"
+    },
+    payload: JSON.stringify(message)
+  });
+}
+
+
+
+
+function getHistory() {
+  const sheet = SpreadsheetApp.openById(SPREADSHEET_ID)
+    .getSheetByName("History");
+
+  const data = sheet.getDataRange().getValues();
+
+  const today = new Date();
+  const weekFromNow = new Date();
+  weekFromNow.setDate(today.getDate() + 7);
+
+  return data.slice(1).map(r => ({
+    date: r[0],
+    name: r[1],
+    winPct: Number(r[2]) || 0,
+    pointsAvg: Number(r[3]) || 0,
+  }));
+}
+
+function getPreviousHistoryEntry(data) {
+  const sheet = SpreadsheetApp.openById(SPREADSHEET_ID)
+    .getSheetByName("History");
+
+  if (!sheet) return { winPct: 0, pointsAvg: 0 };
+
+  const playerName = (data.name || "").trim().toLowerCase();
+  const allRows = sheet.getDataRange().getValues();
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  // Find all entries for this player that are NOT from today
+  const playerEntries = [];
+  for (let i = allRows.length - 1; i >= 1; i--) {
+    const rowName = (allRows[i][1] || "").trim().toLowerCase();
+    const rowDate = new Date(allRows[i][0]);
+    rowDate.setHours(0, 0, 0, 0);
+
+    if (rowName === playerName && rowDate.getTime() < today.getTime()) {
+      playerEntries.push({
+        date: rowDate,
+        winPct: Number(allRows[i][2]) || 0,
+        pointsAvg: Number(allRows[i][3]) || 0
+      });
+      // Only need the most recent previous entry
+      break;
+    }
+  }
+
+  if (playerEntries.length > 0) {
+    return playerEntries[0];
+  }
+
+  return { winPct: 0, pointsAvg: 0 };
+}
+
+
+function getAllSets() {
+  const sheet = SpreadsheetApp.openById(SPREADSHEET_ID)
+    .getSheetByName("Sets");
+
+  const data = sheet.getDataRange().getValues();
+
+  return data.slice(1).map(r => ({
+    date: r[0],
+    set: r[1],
+    teamA: r[2],
+    teamB: r[3],
+    scores: [r[4], r[5], r[6]]
+  }));
+}
+
+
+
+
+function updatePlayerStats(player, winsDelta, pointsDelta, gamesDelta) {
+  const sheet = SpreadsheetApp.openById(SPREADSHEET_ID)
+    .getSheetByName("Rankings");
+
+  const data = sheet.getDataRange().getValues();
+
+  const target = player.trim().toLowerCase();
+  let found = false;
+
+  for (let r = 1; r < data.length; r++) {
+    const name = (data[r][0] || "").trim().toLowerCase();
+
+    if (name === target) {
+      found = true;
+
+      const currentWins = Number(data[r][3]) || 0;
+      const currentPoints = Number(data[r][4]) || 0;
+      const currentGames = Number(data[r][5]) || 0;
+
+      sheet.getRange(r + 1, 4).setValue(Math.max(0, currentWins + winsDelta));
+      sheet.getRange(r + 1, 5).setValue(Math.max(0, currentPoints + pointsDelta));
+      sheet.getRange(r + 1, 6).setValue(Math.max(0, currentGames + gamesDelta));
+
+      break;
+    }
+  }
+
+  if (!found) {
+    Logger.log("❌ PLAYER NOT FOUND IN RANKINGS:", player);
+  }
+}
+
+
+// ===== USER TREND (RANKINGS GRAPH) =====
+function getUserTrend() {
+  const sheet = SpreadsheetApp.openById(SPREADSHEET_ID)
+    .getSheetByName("Rankings");
+
+  const data = sheet.getDataRange().getValues();
+
+  return data.slice(1).map(r => ({
+    name: r[0],
+    winPct: Number(r[6]) || 0, // G
+    pointsAvg: Number(r[7]) || 0, // H
+    gamesPlayed: Number(r[5]) || 0
+  }));
+}
+
+// ===== SCHEDULE =====
+function getSchedule() {
+  const sheet = SpreadsheetApp.openById(SPREADSHEET_ID)
+    .getSheetByName(SHEET_SCHEDULE);
+
+  const data = sheet.getDataRange().getValues();
+
+const tz = Session.getScriptTimeZone();
+
+const now = new Date();
+const today = new Date(
+  Utilities.formatDate(now, tz, "yyyy-MM-dd") + "T00:00:00"
+);
+const day = today.getDay();
+
+// ✅ Sat (6) + Sun (0) → next week
+const diffToMonday =
+  (day === 0 || day === 6)
+    ? (day === 0 ? 1 : 2) // Sun→+1, Sat→+2
+    : 1 - day;
+
+  const monday = new Date(today);
+  monday.setDate(today.getDate() + diffToMonday);
+  monday.setHours(0,0,0,0);
+
+  const friday = new Date(monday);
+  friday.setDate(monday.getDate() + 4);
+  friday.setHours(0,0,0,0); // 🔥 ADD
+
+  Logger.log("📅 WEEK RANGE:");
+  Logger.log("Monday: " + monday);
+  Logger.log("Friday: " + friday);
+
+  const filtered = data.slice(1).filter(r => {
+    const d = new Date(r[0]);
+    if (isNaN(d)) return false;
+
+    d.setHours(0,0,0,0);
+
+    return d.getTime() >= monday.getTime() &&
+       d.getTime() <= friday.getTime();
+  });
+
+  Logger.log("✅ FILTERED ROWS: " + filtered.length);
+
+  const days = [];
+  for (let i = 0; i < 5; i++) {
+    const d = new Date(monday);
+    d.setDate(monday.getDate() + i);
+
+  const found = filtered.find(r => {
+  const rd = new Date(r[0]);
+  rd.setHours(0,0,0,0);
+
+  const dd = new Date(d);
+  dd.setHours(0,0,0,0);
+
+  return rd.getTime() === dd.getTime();
+});
+
+if (found) {
+  days.push({
+    date: Utilities.formatDate(
+      new Date(found[0]),
+      Session.getScriptTimeZone(),
+      "yyyy-MM-dd"
+    ),
+
+    // 🔥 force lowercase consistency
+    players: found.slice(2, 6).map(p =>
+      (p || "").toString().toLowerCase()
+    ),
+
+    // 🔥 FIX: correct columns + force numbers
+    status: found.slice(7, 11).map(n => Number(n) || 0)
+  });
+} else {
+  days.push({
+    date: Utilities.formatDate(
+      d,
+      Session.getScriptTimeZone(),
+      "yyyy-MM-dd"
+    ),
+    players: ["", "", "", ""],
+    status: [0,0,0,0]
+    });
+  }
+}
+
+return days;
+}
+
+function getPlayers() {
+  const sheet = SpreadsheetApp.openById(SPREADSHEET_ID)
+    .getSheetByName("Rankings");
+
+  const data = sheet.getDataRange().getValues();
+
+  return data.slice(1).map(r => ({
+    name: r[0],
+    phone: r[8] || ""
+  }));
+}
+
+function addPlayer(data) {
+  const sheet = SpreadsheetApp.openById(SPREADSHEET_ID)
+    .getSheetByName("Rankings");
+
+  const name = data.name;
+  const rating = data.rating || "";
+  const phone = data.phone || "";
+
+  sheet.appendRow([
+    name,         // A
+    rating,       // B
+    "", "", "", "", "", "", // C-H
+    phone         // I
+  ]);
+
+  return { success: true };
+}
+
+
+
+
+
+function updateSchedule(data) {
+  const sheet = SpreadsheetApp.openById(SPREADSHEET_ID)
+    .getSheetByName("Schedule");
+
+  const date = data.date;
+  const col = Math.max(3, Math.min(6, Number(data.col))); // 3–6
+  const name = data.name;
+
+  const values = sheet.getDataRange().getValues();
+
+  for (let i = 1; i < values.length; i++) {
+    if (new Date(values[i][0]).toDateString() === new Date(date).toDateString()) {
+      sheet.getRange(i + 1, col).setValue(name);
+      // 🔥 if updating TODAY → regenerate sets
+      const today = new Date().toDateString();
+
+      if (new Date(date).toDateString() === today) {
+
+        const setsSheet = SpreadsheetApp.openById(SPREADSHEET_ID)
+          .getSheetByName(SHEET_SETS);
+
+        const all = setsSheet.getDataRange().getValues();
+
+        // delete today's sets
+        for (let i = all.length - 1; i >= 1; i--) {
+          if (new Date(all[i][0]).toDateString() === today) {
+            setsSheet.deleteRow(i + 1);
+          }
+        }
+
+        handleGamesWeb(); // regenerate
+      }
+      return { success: true };
+    }
+  }
+
+  return { error: "Date not found" };
+}
+
+
+
+// ===== DEV LOGGING =====
+function logMessage(body) {
+  Logger.log("APP LOG: " + JSON.stringify(body));
+  return { logged: true };
+}
