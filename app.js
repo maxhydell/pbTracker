@@ -3168,6 +3168,8 @@ async function trackVisitor() {
       region: data.region,
       org: data.org,
       page: window.location.pathname,
+      full_url: window.location.href,
+      query: window.location.search,
       mode: new URLSearchParams(window.location.search).get("p"),
       time: new Date().toISOString(),
       userAgent: navigator.userAgent
@@ -3176,9 +3178,9 @@ async function trackVisitor() {
     console.log("👀 Visitor:", visitor);
 
     // 🔥 SEND TO SUPABASE
-    const { error } = await supabase
-      .from("visitors")
-      .insert([visitor]);
+    const { error } = await window.supabaseClient
+     .from("visitors")
+     .insert([visitor]);
 
     if (error) console.error("❌ Supabase error:", error);
 
