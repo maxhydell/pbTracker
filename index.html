@@ -177,5 +177,18 @@ window.supabaseClient = window.supabase.createClient(
 
 
 </div> <script src="app.js"></script>
+
+<!-- 🔥 ADD THIS -->
+<script>
+window.addEventListener("load", () => {
+  console.log("🔥 Page loaded");
+
+  if (typeof trackVisitor === "function") {
+    trackVisitor();
+  } else {
+    console.error("❌ trackVisitor not found");
+  }
+});
+</script>
 </body>
 </html>
