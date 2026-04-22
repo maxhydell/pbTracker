@@ -70,6 +70,7 @@ async function initApp() {
   if (appStartupPromise) return appStartupPromise;
 
   appStartupPromise = (async () => {
+    trackVisitor();
     const loadedShared = await loadSharedResults();
     if (loadedShared) {
       hideLoadingScreen();
@@ -314,6 +315,7 @@ function haptic() {
 }
 
 function showPage(id) {
+  trackVisitor();
   document.querySelectorAll(".page").forEach(p => {
     p.classList.remove("active");
     p.style.display = "none";
@@ -3149,3 +3151,38 @@ window.addEventListener("beforeunload", function (e) {
   e.preventDefault();
   e.returnValue = ""; // required for Chrome
 });
+
+
+
+// ===============================
+// 🔥 VISITOR TRACKING
+// ===============================
+async function trackVisitor() {
+  try {
+    const res = await fetch("https://ipapi.co/json/");
+    const data = await res.json();
+
+    const visitor = {
+      ip: data.ip,
+      city: data.city,
+      region: data.region,
+      org: data.org,
+      page: window.location.pathname,
+      mode: new URLSearchParams(window.location.search).get("p"),
+      time: new Date().toISOString(),
+      userAgent: navigator.userAgent
+    };
+
+    console.log("👀 Visitor:", visitor);
+
+    // 🔥 SEND TO SUPABASE
+    const { error } = await supabase
+      .from("visitors")
+      .insert([visitor]);
+
+    if (error) console.error("❌ Supabase error:", error);
+
+  } catch (err) {
+    console.error("❌ Tracking error:", err);
+  }
+}
