@@ -1,4 +1,4 @@
-const API_URL = "https://script.google.com/macros/s/AKfycbx731w7AJnEUtjM61Z1pAV9Uuy8GYsQyNV9OhZfySCX-MvpXYwAuvr7d7DFYZR-chl2/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbzEzopc2a_90vgsArWmWHNxZS9X4k89WHxRaPgi_HwpU1sRNDra5-r6JBEPYAms_oj4/exec";
 
 
 
@@ -1655,9 +1655,6 @@ if (window.OneSignal && !localStorage.getItem("notifAsked")) {
     });
   });
 
-  // ===== SAVE HISTORY TO BACKEND =====
-  await callAPI({ action: "saveHistory" });
-
   // ===== FETCH PREVIOUS HISTORY FOR EACH PLAYER =====
   const previousHistoryMap = {};
   for (const name of Object.keys(results)) {
@@ -1671,8 +1668,8 @@ if (window.OneSignal && !localStorage.getItem("notifAsked")) {
   // ===== ADD % CHANGE (comparing to PREVIOUS history entry) =====
   const final = Object.keys(results).map(name => {
     const previous = previousHistoryMap[name] || { winPct: 0, pointsAvg: 0 };
-    const afterP = after.find(p => p.name.toLowerCase() === name)?.winPct || 0;
-    const change = Number(((afterP - previous.winPct) * 100).toFixed(2));
+    const current = before.find(p => p.name.toLowerCase() === name)?.winPct || 0;
+    const change = Number(((current - previous.winPct) * 100).toFixed(2));
 
     return {
       name,
@@ -1692,6 +1689,10 @@ if (window.OneSignal && !localStorage.getItem("notifAsked")) {
   renderResults(final);
   setDayComplete(true);
   updateDoneUiVisibility();
+
+  // ===== SAVE HISTORY TO BACKEND =====
+  await callAPI({ action: "saveHistory" });
+
   await loadRankings();
 
 
@@ -1709,7 +1710,7 @@ await callAPI({
   localStorage.setItem(`pbTracker_results_${todayKey()}`, buildResultsHtml(
     final.map(x => ({ ...x, key: x.name.toLowerCase(), displayName: x.name, prevWinPct: previousHistoryMap[x.name]?.winPct || 0 })),
     getMorningWinPctSnapshot(globalData.trend || before || []),
-    after || []
+    before || []
   ));
 
   const shareUrl = `${window.location.origin}${getSiteBasePath()}share/?r=${shareId}`;
