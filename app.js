@@ -1,4 +1,4 @@
-const API_URL = "https://script.google.com/macros/s/AKfycbxD4MvfkhNB-qDWDTGmyCgJmowOOLCu6rzHT_VIOwPkw1g8OFhZ5PY0nFu8IhGm9WB0/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbx731w7AJnEUtjM61Z1pAV9Uuy8GYsQyNV9OhZfySCX-MvpXYwAuvr7d7DFYZR-chl2/exec";
 
 
 
@@ -11,6 +11,8 @@ let playerSelectTouched = false;
 let lastTodaySetsData = null;
 let scheduleOpenDate = null;
 let scheduleRefreshPausedUntil = 0;
+let appStartupPromise = null;
+let refreshLoopStarted = false;
 const BOOK_COURT_STORAGE_KEY = "pbTracker_bookedCourtDays_v1";
 
 const LS_DAY_COMPLETE = "pbTracker_dayComplete";
@@ -52,18 +54,49 @@ function endTimer(name) {
   console.timeEnd(`⏱️ ${name}`);
 }
 
-async function initApp() {
-  await loadAllData(); // 🔥 ONLY ONCE
-  // ✅ ADD THIS LINE
-  getMorningWinPctSnapshot(globalData.trend);
-  loadSchedule();
-  loadTodaySetsAll();
-  // 🔥 ADD THIS
-  const page = getRoutePage();
-  showPage(page);
+function hideLoadingScreen() {
+  const loader = document.getElementById("loading-screen");
+  if (!loader) return;
+
+  loader.style.opacity = "0";
+  loader.style.animation = "fadeOut 0.4s ease forwards";
+
+  setTimeout(() => {
+    loader.style.display = "none";
+  }, 400);
 }
 
-initApp();
+async function initApp() {
+  if (appStartupPromise) return appStartupPromise;
+
+  appStartupPromise = (async () => {
+    const loadedShared = await loadSharedResults();
+    if (loadedShared) {
+      hideLoadingScreen();
+      return;
+    }
+
+    await loadPlayers();
+    await loadAllData(true);
+
+    getMorningWinPctSnapshot(globalData.trend);
+
+    const page = getInitialPageFromPath();
+    showPage(page);
+
+    loadTodaySetsAll();
+    await Promise.all([loadRankings(), loadSchedule()]);
+
+    renderGreeting();
+    renderPlayerOnboard();
+    hideLoadingScreen();
+  })().catch(err => {
+    appStartupPromise = null;
+    throw err;
+  });
+
+  return appStartupPromise;
+}
 
 document.addEventListener("touchstart", e => {
   touchStartY = e.touches[0].clientY;
@@ -3063,47 +3096,9 @@ window.addEventListener("popstate", () => {
   showPage(page);
 });
 
-(async () => {
-  try {
-    // 🔥 1. use clean URL routing
-    showPage(getRoutePage());
-
-    // 🔥 2. instant UI
-    loadTodaySetsAll();
-    loadRankings();
-
-    // 🔥 3. load data
-    await loadAllData(true);
-
-    // 🔥 4. re-render
-    loadTodaySetsAll();
-    loadRankings();
-
-  } catch (err) {
-    console.error("LOAD FAILED", err);
-  }
-})();
-
 document.addEventListener("DOMContentLoaded", async () => {
-  const loadedShared = await loadSharedResults();
-
-
-  if (loadedShared) return; // 🔥 STOP normal app
   try {
-    loadTodaySetsAll().then(() => {
-      const loading = document.getElementById("loading-screen");
-      if (loading) {
-        loading.style.opacity = "0";
-        setTimeout(() => loading.style.display = "none", 300);
-      }
-    });
-
-    await loadPlayers();
-
-    await Promise.all([loadRankings(), loadSchedule()]);
-
-    renderGreeting();
-    renderPlayerOnboard();
+    await initApp();
   } catch (err) {
     console.error("LOAD FAILED", err);
   }
@@ -3111,7 +3106,6 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 async function preloadData() {
   callAPI({ action: "getUserTrend" });
-  callAPI({ action: "getTodaySets" });
   callAPI({ action: "getSchedule" });
 }
 
@@ -3120,29 +3114,17 @@ async function preloadData() {
 window.addEventListener("load", async () => {
   console.log("🚀 App starting");
 
-  // 🔥 START APP FIRST
   try {
-    await loadAllData();
-    showPage(getInitialPageFromPath());
+    await initApp();
   } catch (e) {
     console.error("Startup crash:", e);
   }
 
-  // 🔁 auto refresh
-  setInterval(ultraSmartRefresh, 5000);
-
-  // 🎬 THEN hide loader
-  const loader = document.getElementById("loading-screen");
-  if (loader) {
-    loader.style.animation = "fadeOut 0.4s ease forwards";
-
-    setTimeout(() => {
-      loader.style.display = "none";
-    }, 400);
+  if (!refreshLoopStarted) {
+    refreshLoopStarted = true;
+    setInterval(ultraSmartRefresh, 5000);
   }
 });
-
-preloadData();
 
 
 window.addEventListener("beforeunload", function (e) {
