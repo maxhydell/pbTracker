@@ -85,7 +85,7 @@ function saveSetFull(data) {
   Logger.log("🔥 saveSetFull START");
 Logger.log(JSON.stringify(data));
   const setNum = Number(data.set);
-  const newScores = JSON.parse(data.scores || "[]");
+  const newScores = JSON.parse(data.scores || "[]").map(score => String(score || "").trim());
 
   const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
   const sheet = ss.getSheetByName("Sets");
@@ -129,14 +129,9 @@ const rowValues = sheet.getRange(i + 1, 1, 1, sheet.getLastColumn()).getValues()
 // 🔥 LOOP ALL GAMES (supports Game 4+)
 for (let g = 0; g < newScores.length; g++) {
 
-  const oldScore = rowValues[4 + g] || "";
+  const oldScore = String(rowValues[4 + g] || "").trim();
   const newScore = newScores[g] || "";
-
-  // only update if changed
-  if (oldScore !== newScore) {
-    rowValues[4 + g] = newScore;
-  }
-
+  if (oldScore === newScore) continue;
 
   // REMOVE old
   if (oldScore && oldScore.includes("-")) {
@@ -239,11 +234,38 @@ rankingsSheet
         });
       });
 
-      sheet.getRange(1, 9, 1, 4).setValues([players]);
-      sheet.getRange(2, 9, 1, 4)
-           .setValues([players.map(p => totals[p].wins)]);
-      sheet.getRange(3, 9, 1, 4)
-           .setValues([players.map(p => totals[p].points)]);
+      const summaryLabel = "Set " + setNum;
+      const summaryWidth = 5; // H-L
+      const summaryValues = [
+        [summaryLabel, ...players],
+        ["Wins", ...players.map(p => totals[p].wins)],
+        ["Points", ...players.map(p => totals[p].points)]
+      ];
+      const summaryRange = sheet.getRange(1, 8, Math.max(sheet.getLastRow(), 1), summaryWidth).getValues();
+      let summaryStartRow = null;
+
+      for (let r = 0; r < summaryRange.length; r++) {
+        if (String(summaryRange[r][0] || "").trim() === summaryLabel) {
+          summaryStartRow = r + 1;
+          break;
+        }
+      }
+
+      if (!summaryStartRow) {
+        for (let r = 0; r <= Math.max(0, summaryRange.length - 3); r++) {
+          const block = summaryRange.slice(r, r + 3);
+          if (block.length === 3 && block.every(row => row.every(cell => String(cell || "").trim() === ""))) {
+            summaryStartRow = r + 1;
+            break;
+          }
+        }
+      }
+
+      if (!summaryStartRow) {
+        summaryStartRow = sheet.getLastRow() + 1;
+      }
+
+      sheet.getRange(summaryStartRow, 8, summaryValues.length, summaryValues[0].length).setValues(summaryValues);
 
       return { success: true };
     }

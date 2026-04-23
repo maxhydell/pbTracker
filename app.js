@@ -1,4 +1,4 @@
-const API_URL = "https://script.google.com/macros/s/AKfycbzEzopc2a_90vgsArWmWHNxZS9X4k89WHxRaPgi_HwpU1sRNDra5-r6JBEPYAms_oj4/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbxS8gPaEmFSp0Suvr2h8KQzBgwS_jBlVgLUaTRyMepd3kcQCdSqwimB99Hcux3YMbnv/exec";
 
 
 
@@ -22,6 +22,7 @@ const LS_MORNING_WINPCT = "pbTracker_morningWinPct";
 const LS_SCHEDULE_WEEK_ANCHOR = "pbTracker_scheduleWeekAnchor_v1";
 const LS_USER_IP = "pbTracker_userIp_v1";
 const LS_IP_VERIFIED = "pbTracker_ipVerified_v1";
+const ACCESS_CODE = "ymcapickle";
 
 let scheduleDirty = false;
 let pendingScheduleChanges = [];
@@ -47,6 +48,7 @@ const WHITELISTED_IPS = [
 
 window.loadedShared = false;
 let lastMetaSeen = null;
+let cachedVisitorContext = null;
 function log(label, data) {
   console.log("🔥", label, data);
 }
@@ -101,7 +103,13 @@ function getSetScores(match) {
 }
 
 function collectSetScoresFromDom(setNumber) {
-  const cards = Array.from(document.querySelectorAll(`.match-card[data-set="${setNumber}"]`));
+  const activePage = document.querySelector(".page.active");
+  const scopedCards = activePage
+    ? Array.from(activePage.querySelectorAll(`.match-card[data-set="${setNumber}"]`))
+    : [];
+  const cards = scopedCards.length
+    ? scopedCards
+    : Array.from(document.querySelectorAll(`.match-card[data-set="${setNumber}"]`));
 
   return cards.map(card => {
     const inputs = card.querySelectorAll(".score-editable input");
@@ -235,8 +243,9 @@ function queueBackgroundStartup(pageId) {
 async function checkIpWhitelist() {
   try {
     updateLoadingProgress(15, "Verifying access...");
-    
-    userIp = await getVisitorIp();
+
+    const visitor = await getVisitorContext();
+    userIp = visitor.ip;
     localStorage.setItem(LS_USER_IP, userIp || "unknown");
 
     const isWhitelisted = userIp && WHITELISTED_IPS.includes(userIp);
@@ -247,7 +256,7 @@ async function checkIpWhitelist() {
       
       // Show access restriction popup after app loads
       setTimeout(() => {
-        showAccessRestrictionPopup(userIp);
+        showAccessRestrictionPopup(userIp || "unknown");
       }, 500);
     } else {
       isEditingLocked = false;
@@ -261,14 +270,21 @@ async function checkIpWhitelist() {
 }
 
 function showAccessRestrictionPopup(ip) {
-  // Add to input page
-  const inputContainer = document.getElementById("input");
-  if (inputContainer) {
-    const existingPopup = document.getElementById("accessRestrictionPopup-input");
+  const popupConfigs = [
+    { pageId: "input", popupId: "accessRestrictionPopup-input", inputId: "accessCode" },
+    { pageId: "schedule", popupId: "accessRestrictionPopup-schedule", inputId: "accessCodeSchedule" },
+    { pageId: "sets", popupId: "accessRestrictionPopup-sets", inputId: "accessCodeSets" }
+  ];
+
+  popupConfigs.forEach(({ pageId, popupId, inputId }) => {
+    const container = document.getElementById(pageId);
+    if (!container) return;
+
+    const existingPopup = document.getElementById(popupId);
     if (existingPopup) existingPopup.remove();
 
     const popup = document.createElement("div");
-    popup.id = "accessRestrictionPopup-input";
+    popup.id = popupId;
     popup.className = "player-onboard access-restriction-card";
     popup.style.display = "block";
     popup.innerHTML = `
@@ -277,7 +293,7 @@ function showAccessRestrictionPopup(ip) {
           <h3>⚠️ Editing Access Required</h3>
           <p>You currently don't have editing access. Enter a code to proceed.</p>
           <div style="margin-top: 15px;">
-            <input id="accessCode" type="password" placeholder="Enter access code" class="onboard-input" onkeypress="if(event.key==='Enter') verifyAccessCode()" />
+            <input id="${inputId}" type="password" placeholder="Enter access code" class="onboard-input" onkeypress="if(event.key==='Enter') verifyAccessCode()" />
             <button onclick="verifyAccessCode()" style="margin-top: 10px; width: 100%; padding: 10px; background: #4fc3ff; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; color: #000;">Unlock</button>
           </div>
           <p style="font-size: 12px; color: #999; margin-top: 10px;">Your IP: ${ip}</p>
@@ -285,74 +301,93 @@ function showAccessRestrictionPopup(ip) {
       </div>
     `;
 
-    inputContainer.insertBefore(popup, inputContainer.firstChild);
-    document.getElementById("accessCode").focus();
-  }
+    container.insertBefore(popup, container.firstChild);
+  });
 
-  // Add to schedule page
-  const scheduleContainer = document.getElementById("schedule");
-  if (scheduleContainer) {
-    const existingPopup = document.getElementById("accessRestrictionPopup-schedule");
-    if (existingPopup) existingPopup.remove();
-
-    const popup = document.createElement("div");
-    popup.id = "accessRestrictionPopup-schedule";
-    popup.className = "player-onboard access-restriction-card";
-    popup.style.display = "block";
-    popup.innerHTML = `
-      <div class="player-onboard-inner">
-        <div class="player-onboard-text">
-          <h3>⚠️ Editing Access Required</h3>
-          <p>You currently don't have editing access. Enter a code to proceed.</p>
-          <div style="margin-top: 15px;">
-            <input id="accessCodeSchedule" type="password" placeholder="Enter access code" class="onboard-input" onkeypress="if(event.key==='Enter') verifyAccessCode()" />
-            <button onclick="verifyAccessCode()" style="margin-top: 10px; width: 100%; padding: 10px; background: #4fc3ff; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; color: #000;">Unlock</button>
-          </div>
-          <p style="font-size: 12px; color: #999; margin-top: 10px;">Your IP: ${ip}</p>
-        </div>
-      </div>
-    `;
-
-    scheduleContainer.insertBefore(popup, scheduleContainer.firstChild);
-  }
+  const activeInput = document.querySelector('.page.active #accessCode, .page.active #accessCodeSchedule, .page.active #accessCodeSets')
+    || document.getElementById("accessCode")
+    || document.getElementById("accessCodeSchedule")
+    || document.getElementById("accessCodeSets");
+  if (activeInput) activeInput.focus();
 }
 
 function verifyAccessCode() {
-  const codeInput = document.getElementById("accessCode");
-  const code = codeInput.value.trim();
+  const codeInput = [
+    document.querySelector('.page.active #accessCode'),
+    document.querySelector('.page.active #accessCodeSchedule'),
+    document.querySelector('.page.active #accessCodeSets'),
+    document.getElementById("accessCode"),
+    document.getElementById("accessCodeSchedule"),
+    document.getElementById("accessCodeSets")
+  ].find(input => input && String(input.value || "").trim());
 
-  // Access code verification
-  const correctCode = "ymcapickle";
-  
-  if (code === correctCode) {
+  const fallbackInput = document.querySelector('.page.active #accessCode, .page.active #accessCodeSchedule, .page.active #accessCodeSets')
+    || document.getElementById("accessCode")
+    || document.getElementById("accessCodeSchedule")
+    || document.getElementById("accessCodeSets");
+  const inputEl = codeInput || fallbackInput;
+  if (!inputEl) return;
+
+  const code = String(inputEl.value || "").trim();
+
+  if (code === ACCESS_CODE) {
     localStorage.setItem(LS_IP_VERIFIED, "1");
     isEditingLocked = false;
-    const popup = document.getElementById("accessRestrictionPopup");
-    if (popup) popup.remove();
     console.log("✅ Access unlocked");
-    
-    // Unlock editing
-    const setInputs = document.querySelectorAll(".score-editable input, .player-input");
-    const buttons = document.querySelectorAll(".set-save-btn, #scheduleSaveBtn, #doneBtn");
-    
+
+    [
+      "accessRestrictionPopup-input",
+      "accessRestrictionPopup-schedule",
+      "accessRestrictionPopup-sets"
+    ].forEach(id => {
+      const popup = document.getElementById(id);
+      if (popup) popup.remove();
+    });
+
+    const setInputs = document.querySelectorAll(".score-editable input, .player-input, .match-card input");
+    const buttons = document.querySelectorAll(".set-save-btn, #scheduleSaveBtn, #doneBtn, .sms-btn, .check-btn, .add-game-btn, .add-player-btn");
+
     setInputs.forEach(input => {
       input.disabled = false;
       input.style.opacity = "1";
       input.style.cursor = "pointer";
+      input.style.pointerEvents = "";
     });
-    
+
     buttons.forEach(btn => {
       btn.disabled = false;
       btn.style.opacity = "1";
       btn.style.cursor = "pointer";
+      btn.style.pointerEvents = "";
     });
+
+    showAccessUnlockedMessage();
   } else {
-    codeInput.style.border = "2px solid #dc2626";
-    codeInput.value = "";
+    inputEl.style.border = "2px solid #dc2626";
+    inputEl.value = "";
     setTimeout(() => {
-      codeInput.style.border = "";
+      inputEl.style.border = "";
     }, 2000);
   }
+}
+
+function showAccessUnlockedMessage() {
+  const existing = document.getElementById("accessUnlockedToast");
+  if (existing) existing.remove();
+
+  const toast = document.createElement("div");
+  toast.id = "accessUnlockedToast";
+  toast.className = "access-unlocked-toast";
+  toast.textContent = "Unlocked";
+  document.body.appendChild(toast);
+
+  setTimeout(() => {
+    toast.classList.add("hide");
+  }, 900);
+
+  setTimeout(() => {
+    toast.remove();
+  }, 1300);
 }
 
 function lockEditingIfNeeded() {
@@ -362,7 +397,7 @@ function lockEditingIfNeeded() {
 
   // Lock all editing controls
   const setInputs = document.querySelectorAll(".score-editable input, .player-input, .match-card input");
-  const buttons = document.querySelectorAll(".set-save-btn, #scheduleSaveBtn, #doneBtn, .sms-btn, .check-btn");
+  const buttons = document.querySelectorAll(".set-save-btn, #scheduleSaveBtn, #doneBtn, .sms-btn, .check-btn, .add-game-btn, .add-player-btn");
   
   setInputs.forEach(input => {
     input.disabled = true;
@@ -2338,10 +2373,10 @@ function openShare() {
     <div class="share-modal-overlay" onclick="closeShare()"></div>
     <div class="share-modal-content card">
       <div class="share-modal-header">
-        <h3>Share Results</h3>
+        <h3>Share Player Link</h3>
         <button class="close-btn" onclick="closeShare()">✕</button>
       </div>
-      <p class="share-modal-text">Who do you want to share with?</p>
+      <p class="share-modal-text">Type a player name to copy their share link.</p>
       <div class="onboard-input-wrap">
         <input type="text" id="sharePlayerInput" class="onboard-input" placeholder="Start typing a name" autocomplete="off">
       </div>
@@ -2390,25 +2425,25 @@ function attachShareAutocomplete(input) {
 function triggerShareLink(name) {
   if (!name) return;
   
-  const shareUrl = `https://pbtrkr.app/share/?p=${name.toLowerCase()}`;
+  const shareUrl = `https://pbtrkr.app/share/?p=${encodeURIComponent(name.trim())}`;
   
   navigator.clipboard.writeText(shareUrl).then(() => {
-    // Show success message
     const modal = document.getElementById("shareModal");
+    if (!modal) return;
     const content = modal.querySelector(".share-modal-content");
+    if (!content) return;
     
     content.innerHTML = `
       <div class="share-modal-header">
-        <h3>Link Copied!</h3>
+        <h3>Link copied</h3>
       </div>
-      <p style="text-align: center; font-size: 16px; margin: 20px 0;">✅ Link copied to clipboard</p>
-      <p style="text-align: center; font-size: 14px; color: #666;">${shareUrl}</p>
+      <p class="share-modal-text" style="font-size: 16px; margin: 20px 0;">Link copied</p>
     `;
     
     setTimeout(() => {
       closeShare();
-    }, 1500);
-  }).catch(err => {
+    }, 1000);
+  }).catch(() => {
     alert("Failed to copy link");
   });
 }
@@ -2630,19 +2665,23 @@ function openBestPartner(player, stats) {
 
   const rows = Object.entries(p.partners)
     .map(([name, d]) => ({
-      name: capitalize(player),
-      partner: capitalize(name),
+      rank: "",
+      name: capitalize(name),
       win: formatWinPctDisplay(d.wins / d.games)
     }))
     .sort((a,b)=>parseFloat(b.win)-parseFloat(a.win))
     .slice(0,10);
 
+  rows.forEach((row, index) => {
+    row.rank = index + 1;
+  });
+
   showAnalyticsModal(
     "Best Partners",
-    ["Name","Best Partner","Win %"],
+    ["Rank","Name","Win %"],
     rows,
     player,
-    { highlightFirstRow: true }
+    { highlightFirstRow: true, noHighlight: true }
   );
 }
 function openHardestOpponent(player, stats) {
@@ -2650,19 +2689,23 @@ function openHardestOpponent(player, stats) {
 
   const rows = Object.entries(p.opponents)
     .map(([name, d]) => ({
-      name: capitalize(player),
-      opponent: capitalize(name),
+      rank: "",
+      name: capitalize(name),
       win: formatWinPctDisplay(d.wins / d.games)
     }))
     .sort((a,b)=>parseFloat(a.win)-parseFloat(b.win))
     .slice(0,10);
 
+  rows.forEach((row, index) => {
+    row.rank = index + 1;
+  });
+
   showAnalyticsModal(
     "Hardest Opponents",
-    ["Name","Opponent","Win %"],
+    ["Rank","Name","Win %"],
     rows,
     player,
-    { highlightFirstRow: true }
+    { highlightFirstRow: true, noHighlight: true }
   );
 }
 function openLosingStreak(stats, selectedPlayer) {
@@ -2737,6 +2780,54 @@ let lastModalDeep = null;
 let lastModalWinPctStr = "";
 let lastModalAvgPointsStr = "";
 let lastModalGamesPlayed = 0;
+let lastModalTrend = null;
+let lastModalAllSets = null;
+
+function buildRankedStatRows(entries, selectedPlayer, formatter) {
+  const rows = [...entries]
+    .sort((a, b) => {
+      const diff = Number(b.value || 0) - Number(a.value || 0);
+      if (diff !== 0) return diff;
+      return String(a.name || "").localeCompare(String(b.name || ""));
+    })
+    .map((row, index) => ({
+      rankNumber: index + 1,
+      name: capitalize(row.name),
+      value: row.value
+    }));
+
+  const selectedIndex = rows.findIndex(row => String(row.name || "").toLowerCase() === String(selectedPlayer || "").toLowerCase());
+  if (selectedIndex === -1 || selectedIndex < 6) {
+    return rows.slice(0, 6).map(row => ({
+      rank: String(row.rankNumber),
+      name: row.name,
+      value: formatter(row.value)
+    }));
+  }
+
+  let start = Math.max(6, selectedIndex - 2);
+  let end = Math.min(rows.length - 1, selectedIndex + 2);
+
+  while ((end - start) < 4 && start > 6) start--;
+  while ((end - start) < 4 && end < rows.length - 1) end++;
+
+  const topRows = rows.slice(0, 6);
+  const focusRows = rows.slice(start, end + 1);
+
+  return [
+    ...topRows.map(row => ({
+      rank: String(row.rankNumber),
+      name: row.name,
+      value: formatter(row.value)
+    })),
+    { rank: "...", name: "...", value: "..." },
+    ...focusRows.map(row => ({
+      rank: String(row.rankNumber),
+      name: row.name,
+      value: formatter(row.value)
+    }))
+  ];
+}
 
 function handleAnalyticsStatClick(kind) {
   console.log("📊 analytics stat clicked", kind);
@@ -2746,32 +2837,60 @@ function handleAnalyticsStatClick(kind) {
   if (!pk) return;
 
   if (kind === "winPct") {
+    const rows = buildRankedStatRows(
+      (lastModalTrend || []).map(player => ({
+        name: String(player.name || "").toLowerCase(),
+        value: Number(player.winPct) || 0
+      })),
+      pk,
+      value => formatWinPctDisplay(value)
+    );
     showAnalyticsModal(
       "Win %",
-      ["Stat", "Value"],
-      [{ stat: "Win rate", value: lastModalWinPctStr || "—" }],
+      ["Rank", "Name", "Avg. Win %"],
+      rows,
       pk,
-      { noHighlight: true }
+      { noHighlight: false }
     );
     return;
   }
   if (kind === "avgPoints") {
+    const rows = buildRankedStatRows(
+      (lastModalTrend || []).map(player => ({
+        name: String(player.name || "").toLowerCase(),
+        value: Number(player.pointsAvg) || 0
+      })),
+      pk,
+      value => Number(value || 0).toFixed(2)
+    );
     showAnalyticsModal(
       "Avg points",
-      ["Stat", "Value"],
-      [{ stat: "Points per game", value: lastModalAvgPointsStr || "—" }],
+      ["Rank", "Name", "Avg. Points per Game"],
+      rows,
       pk,
-      { noHighlight: true }
+      { noHighlight: false }
     );
     return;
   }
   if (kind === "winStreak") {
+    const allPlayerKeys = Array.from(new Set([
+      ...(lastModalTrend || []).map(player => String(player.name || "").toLowerCase()),
+      ...Object.keys(lastModalBuildStats || {})
+    ]));
+    const rows = buildRankedStatRows(
+      allPlayerKeys.map(playerName => ({
+        name: playerName,
+        value: analyzePlayerFromSets(lastModalAllSets || [], playerName).winStreak || 0
+      })),
+      pk,
+      value => String(value || 0)
+    );
     showAnalyticsModal(
       "Longest win streak",
-      ["Stat", "Value"],
-      [{ stat: "Games in a row", value: String(deep?.winStreak ?? "—") }],
+      ["Rank", "Name", "Longest Win Streak"],
+      rows,
       pk,
-      { noHighlight: true }
+      { noHighlight: false }
     );
     return;
   }
@@ -3110,6 +3229,13 @@ function showAnalyticsModal(title, columns, rows, selectedPlayer, opts = {}) {
   const container = getAnalyticsTablesContainer();
   if (!container) return;
   const esc = escapeHtml;
+  const columnTemplate = columns.length === 2
+    ? "1.2fr 1fr"
+    : columns.length === 3
+      ? "72px minmax(0, 1fr) 120px"
+      : columns.length === 4
+        ? "60px 1.5fr 80px 100px"
+        : `repeat(${columns.length}, minmax(0, 1fr))`;
   
   // Calculate z-index based on how many panels are already open
   const existingPanels = container.querySelectorAll(".analytics-table-panel");
@@ -3121,7 +3247,7 @@ function showAnalyticsModal(title, columns, rows, selectedPlayer, opts = {}) {
         <h3 class="global-analytics-modal__title">${esc(title)}</h3>
         <button type="button" class="global-analytics-modal__close" onclick="closeAnalyticsPanel(this)" aria-label="Close">&times;</button>
       </div>
-      <div class="leaderboard leaderboard--modal">
+      <div class="leaderboard leaderboard--modal" style="--leaderboard-grid: ${columnTemplate};">
         <div class="leaderboard-header">
           ${columns.map(c => `<span>${esc(c)}</span>`).join("")}
         </div>
@@ -3139,7 +3265,7 @@ function showAnalyticsModal(title, columns, rows, selectedPlayer, opts = {}) {
       </div>
     </div>
   `;
-  container.insertAdjacentHTML("beforeend", body);
+  container.insertAdjacentHTML("afterbegin", body);
 }
 
 
@@ -3347,6 +3473,8 @@ async function renderDashboardAnalytics(player) {
   lastModalWinPctStr = winPctStr;
   lastModalAvgPointsStr = avgPointsSafe.toFixed(2);
   lastModalGamesPlayed = gamesPlayed;
+  lastModalTrend = trend;
+  lastModalAllSets = allSets;
 
   const html = `
     <div class="analytics-main">
@@ -3602,49 +3730,89 @@ window.addEventListener("beforeunload", function (e) {
 // ===============================
 // 🔥 VISITOR TRACKING
 // ===============================
-let cachedUserIp = null;
+async function getVisitorContext() {
+  if (cachedVisitorContext) return cachedVisitorContext;
 
-async function getVisitorIp() {
-  if (cachedUserIp) return cachedUserIp;
+  const fallbackContext = {
+    ip: null,
+    city: null,
+    region: null,
+    org: null,
+    mac: null
+  };
 
   try {
-    // Try multiple services with fallback
     const services = [
-      () => fetch("https://api.ipify.org?format=json").then(r => r.json()).then(d => d.ip),
-      () => fetch("https://ipapi.co/json/").then(r => r.json()).then(d => d.ip),
-      () => fetch("https://ip.nf/?json").then(r => r.json()).then(d => d.query)
+      () => fetch("https://ipapi.co/json/").then(r => r.json()).then(d => ({
+        ip: d.ip || null,
+        city: d.city || null,
+        region: d.region || null,
+        org: d.org || null,
+        mac: null
+      })),
+      () => fetch("https://ip.nf/?json").then(r => r.json()).then(d => ({
+        ip: d.ip?.ip || d.query || null,
+        city: d.ip?.city || null,
+        region: d.ip?.region || null,
+        org: d.ip?.org || null,
+        mac: null
+      })),
+      () => fetch("https://api.ipify.org?format=json").then(r => r.json()).then(d => ({
+        ip: d.ip || null,
+        city: null,
+        region: null,
+        org: null,
+        mac: null
+      }))
     ];
 
     for (const service of services) {
       try {
-        cachedUserIp = await Promise.race([service(), new Promise((_, reject) => setTimeout(() => reject("timeout"), 3000))]);
-        if (cachedUserIp) return cachedUserIp;
+        const result = await Promise.race([
+          service(),
+          new Promise((_, reject) => setTimeout(() => reject("timeout"), 3000))
+        ]);
+        if (result?.ip) {
+          cachedVisitorContext = { ...fallbackContext, ...result };
+          return cachedVisitorContext;
+        }
       } catch (e) {
         continue;
       }
     }
   } catch (err) {
-    console.warn("⚠️ Could not fetch IP");
+    console.warn("⚠️ Could not fetch visitor context");
   }
 
-  return null;
+  cachedVisitorContext = fallbackContext;
+  return cachedVisitorContext;
+}
+
+async function getVisitorIp() {
+  const visitor = await getVisitorContext();
+  return visitor.ip;
 }
 
 async function trackVisitor() {
   try {
-    const ip = await getVisitorIp();
+    const visitorContext = await getVisitorContext();
+    const params = new URLSearchParams(window.location.search);
+    const page = params.get("page") || getRoutePage() || window.location.pathname;
 
     const visitor = {
-      ip: ip || "unknown",
-      page: window.location.pathname,
+      ip: visitorContext.ip || "unknown",
+      mac: visitorContext.mac,
+      city: visitorContext.city,
+      region: visitorContext.region,
+      org: visitorContext.org,
+      page,
       full_url: window.location.href,
       query: window.location.search,
-      mode: new URLSearchParams(window.location.search).get("p"),
+      mode: params.get("p"),
       time: new Date().toISOString(),
       userAgent: navigator.userAgent
     };
 
-    // 🔥 SEND TO SUPABASE
     if (window.supabaseClient) {
       const { error } = await window.supabaseClient
         .from("visitors")

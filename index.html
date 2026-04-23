@@ -65,10 +65,16 @@
       <button onclick="navigate('rankings')">📊 Rankings</button>
       <button onclick="navigate('schedule')">📅 Schedule</button>
       <button onclick="navigate('sets')">🎾 Sets</button>
+      <button onclick="openShare()">🔗 Share</button>
     </div>
 
     <div class="menu-bottom">
-      <button onclick="openShare()">📤 Share</button>
+      <button class="share-menu-action" onclick="openShare()" aria-label="Share player link" title="Share player link">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path fill="currentColor" d="M15 5a3 3 0 1 0 2.83 4H18l-7 3.5a3 3 0 0 0 0-1L18 8h-.17A3 3 0 0 0 15 5Zm-9 6a3 3 0 1 0 2.83 4H9l7 3.5a3 3 0 1 0 .9-1.79L10 13.2c0-.13.01-.26.01-.39s0-.26-.01-.39l7.73-3.52A3 3 0 0 0 15 5" />
+        </svg>
+        <span>Share</span>
+      </button>
     </div>
 
 
