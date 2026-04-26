@@ -2406,7 +2406,7 @@ sets.forEach(set => {
       player_name: player.name,
       rating_before: oldRating,
       rating_after: newRating,
-      event_name: eventName
+      event_name: eventName,
       delta: totalDelta,
       matches_played: matches.length
     });
