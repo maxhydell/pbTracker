@@ -42,6 +42,7 @@ let isEditingLocked = false;
 let loadingProgress = 0;
 let rankingsComponentsReady = false;
 let deviceId = null;
+let lastMetaSeen = null;
 let cachedVisitorContext = null;
 function log(label, data) {
   console.log("🔥", label, data);
@@ -121,13 +122,16 @@ function collectSetScoresFromDom(setNumber) {
 }
 
 function getOrCreateDeviceId() {
-  let id = localStorage.getItem(LS_DEVICE_ID);
+  const player = getPlayerFromURL() || getPreferredPlayerFromStorage() || localStorage.getItem("player");
+  const playerKey = player ? `${LS_DEVICE_ID}_${player}` : LS_DEVICE_ID;
+  
+  let id = localStorage.getItem(playerKey);
   if (!id) {
     id = crypto.randomUUID();
-    localStorage.setItem(LS_DEVICE_ID, id);
-    console.log("📱 New device ID created:", id);
+    localStorage.setItem(playerKey, id);
+    console.log("📱 New device ID created for", player || "guest", ":", id);
   } else {
-    console.log("📱 Using existing device ID:", id);
+    console.log("📱 Using stored device ID for", player || "guest", ":", id);
   }
   deviceId = id;
   return id;
@@ -1299,7 +1303,7 @@ function toggleCheck(btn, date, col) {
 
   // 🟡 1 → 2 (confirmed)
   if (state === 1) {
-    btn.src = "green.png";
+    btn.src = "/green.png";
     btn.dataset.state = 2;
 
     input.disabled = true;
@@ -1598,9 +1602,9 @@ data = Array.from({ length: 5 }, (_, i) => {
               ${[0,1,2,3].map(col => {
                 const status = row.status?.[col] || 0;
 
-                let img = "white.png";
+                let img = "/white.png";
                 if (status == 1) img = "orange.png";
-                if (status == 2) img = "green.png";
+                if (status == 2) img = "/green.png";
 
                 return `
                   <div class="player-slot">
@@ -1611,7 +1615,7 @@ data = Array.from({ length: 5 }, (_, i) => {
                       onfocus="pauseScheduleRefresh(); attachAutocomplete(this, '${row.date}', ${col+1})">
 
                     ${status == 2 ? `
-                      <img src="unlock.png" class="sms-btn"
+                      <img src="/unlock.png" class="sms-btn"
                         onclick="unlockPlayer(this, '${row.date}', ${col+1})">
                     ` : `
                       <img src="imessage.png" class="sms-btn"
@@ -1885,7 +1889,7 @@ function unlockPlayer(btn, date, col) {
   btn.src = "imessage.png";
 
   const check = slot.querySelector(".check-btn");
-  check.src = "white.png";
+  check.src = "/white.png";
   check.dataset.state = 0;
 
   // 🔥 NEW: queue change instead of API call
@@ -3700,6 +3704,7 @@ function renderGreeting() {
 
   const player =
     getPlayerFromURL() ||
+    getPreferredPlayerFromStorage() ||
     localStorage.getItem("player");
 
   el.innerText = getGreeting(player);
@@ -3843,8 +3848,19 @@ window.addEventListener("beforeunload", function (e) {
 // 🔥 VISITOR TRACKING
 // ===============================
 async function getVisitorContext() {
-  // Device-based tracking - no IP tracking needed
-  return { device_id: getOrCreateDeviceId() };
+  try {
+    const res = await fetch("https://ipapi.co/json/");
+    const data = await res.json();
+
+    return {
+      ip: data.ip,
+      city: data.city,
+      region: data.region,
+      org: data.org
+    };
+  } catch {
+    return {};
+  }
 }
 
 async function getVisitorIp() {
@@ -3858,11 +3874,17 @@ async function trackVisitor() {
     const params = new URLSearchParams(window.location.search);
     const page = params.get("page") || getRoutePage() || window.location.pathname;
 
+    // 🔥 get location data ONCE
+    if (!cachedVisitorContext) {
+      cachedVisitorContext = await getVisitorContext();
+    }
+
     const visitor = {
       device_id: device,
-      city: null,
-      region: null,
-      org: null,
+      ip: cachedVisitorContext.ip || null,
+      city: cachedVisitorContext.city || null,
+      region: cachedVisitorContext.region || null,
+      org: cachedVisitorContext.org || null,
       page: page || "unknown",
       full_url: window.location.href,
       query: window.location.search || null,
@@ -3871,7 +3893,7 @@ async function trackVisitor() {
       userAgent: navigator.userAgent
     };
 
-    console.log("🔍 Tracking visitor (device-based):", visitor);
+    console.log("🔍 Tracking visitor:", visitor);
 
     if (window.supabaseClient) {
       const { data, error } = await window.supabaseClient
