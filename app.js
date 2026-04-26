@@ -24,6 +24,13 @@ const LS_DEVICE_ID = "pbTracker_deviceId_v1";
 const LS_DEVICE_VERIFIED = "pbTracker_deviceVerified_v1";
 const ACCESS_CODE = "ymcapickle";
 
+// Bite Strength Rating Constants
+const BITE_STRENGTH_K = 0.75;
+const BITE_STRENGTH_D = 12;
+const BITE_STRENGTH_ALPHA = 0.75;
+const BITE_STRENGTH_MAX_SCORE = 12;
+const BITE_STRENGTH_BASE = 50;
+
 let scheduleDirty = false;
 let pendingScheduleChanges = [];
 let touchStartY = 0;
@@ -1726,9 +1733,20 @@ async function loadRankings(options = {}) {
   const player = data.find(p => p.name.toLowerCase() === selectedPlayer);
   if (!player) return;
 
+  // Get all sets once for bite strength calculations
+  const allSetsForRatings = (await getAllSets()) || [];
+
   const bigStatEl = document.getElementById("bigStat");
+  const topPercentEl = document.getElementById("topPercent");
   if (bigStatEl) {
-    bigStatEl.innerText = formatWinPctDisplay(player.winPct);
+    // Calculate Bite Strength and display it instead of Win %
+    const biteStrength = calculateBiteStrength(selectedPlayer, allSetsForRatings, data);
+    bigStatEl.innerText = biteStrength.toFixed(2);
+    
+    // Update label to show Bite Strength
+    if (topPercentEl) {
+      topPercentEl.innerText = "Bite Strength";
+    }
     
     // 🔥 EARLY EXIT FOR RANKINGS PAGE
     if (!rankingsComponentsReady && document.getElementById("rankings")?.classList.contains("active")) {
@@ -1751,8 +1769,8 @@ async function loadRankings(options = {}) {
   }
 
   const rank = sorted.findIndex(p => p.name === player.name) + 1;
-  document.getElementById("topPercent").innerText =
-    `#${rank} Place`;
+  // Label is now set to "Bite Strength" in the bigStatEl block above
+  // document.getElementById("topPercent").innerText = `#${rank} Place`;
 
   const playerHistory = historyCache
     .filter(p => p.name.toLowerCase() === selectedPlayer)
@@ -1834,6 +1852,13 @@ async function loadRankings(options = {}) {
   const filtered = [...data].filter(p =>
     p.winPct > 0 || p.pointsAvg > 0
   ).sort((a, b) => b.winPct - a.winPct);
+
+  // Calculate Bite Strength for all players (reuse allSetsForRatings from above)
+  filtered.forEach(player => {
+    if (!player.biteStrength) {
+      player.biteStrength = calculateBiteStrength(player.name, allSetsForRatings, data);
+    }
+  });
 
   renderLeaderboard(filtered);
   endTimer("Rankings Graph + Leaderboard");
@@ -1917,6 +1942,14 @@ let currentPage = 0;
 function renderLeaderboard(data) {
   if (!data || !Array.isArray(data)) return;
 
+  // Pre-calculate bite strength for all players
+  const biteStrengths = {};
+  data.forEach(p => {
+    const name = String(p.name || "").toLowerCase();
+    if (!biteStrengths[name]) {
+      biteStrengths[name] = p.biteStrength ? Number(p.biteStrength) : BITE_STRENGTH_BASE;
+    }
+  });
 
   const container = document.getElementById("leaderboard");
   if (!container) return;
@@ -1928,6 +1961,7 @@ function renderLeaderboard(data) {
         <span>Player</span>
         <span>Win %</span>
         <span>Points Avg.</span>
+        <span>Bite Strength</span>
       </div>
 
       ${data.map((p, i) => `
@@ -1936,6 +1970,7 @@ function renderLeaderboard(data) {
           <span>${capitalize(p.name)}</span>
           <span>${formatWinPctDisplay(p.winPct)}</span>
           <span>${(Number.isFinite(Number(p.pointsAvg)) ? Number(p.pointsAvg) : 0).toFixed(2)}</span>
+          <span>${(biteStrengths[String(p.name || "").toLowerCase()] || BITE_STRENGTH_BASE).toFixed(2)}</span>
         </div>
       `).join("")}
     </div>
@@ -2116,6 +2151,9 @@ async function finishDay() {
   updateDoneProgress(25);
   const after = await callAPI({ action: "getUserTrend" }, { force: true });
 
+
+  const eventName = new Date().toISOString().split("T")[0];
+
   // 🔥 4. GET TODAY SETS (for wins + points)
   updateDoneProgress(35);
   const sets = await callAPI({ action: "getTodaySets" });
@@ -2202,6 +2240,49 @@ async function finishDay() {
   setDayComplete(true);
   updateDoneUiVisibility();
 
+
+// 🚫 prevent double processing
+const { data: existing } = await window.supabaseClient
+  .from("rating_history")
+  .select("id")
+  .eq("event_name", eventName)
+  .limit(1);
+
+let skipRatings = false;
+
+if (existing && existing.length > 0) {
+  console.log("⚠️ Event already processed, skipping ratings");
+  skipRatings = true;
+}
+
+const matchesByPlayer = {};
+
+sets.forEach(set => {
+  const teamA = set.teamA.split("/").map(p => p.trim().toLowerCase());
+  const teamB = set.teamB.split("/").map(p => p.trim().toLowerCase());
+
+  const scores = set.scores
+    .filter(s => s && s.includes("-"))
+    .map(s => s.split("-").map(Number));
+
+  [...teamA, ...teamB].forEach(player => {
+    if (!matchesByPlayer[player]) matchesByPlayer[player] = [];
+  });
+
+  [...teamA, ...teamB].forEach(player => {
+    const isTeamA = teamA.includes(player);
+
+    matchesByPlayer[player].push({
+      partner: isTeamA ? teamA.find(p => p !== player) : teamB.find(p => p !== player),
+      opp1: isTeamA ? teamB[0] : teamA[0],
+      opp2: isTeamA ? teamB[1] : teamA[1],
+      scores
+    });
+  });
+});
+
+
+
   // ===== SAVE HISTORY TO SUPABASE =====
   updateDoneProgress(80);
   try {
@@ -2217,6 +2298,12 @@ async function finishDay() {
               Player: player.name,
               WinPct: trend.winPct.toString(),
               PointsAvg: trend.pointsAvg.toString()
+              player_name: player.name,
+              rating_before: oldRating,
+              rating_after: newRating,
+              delta: totalDelta,
+              matches_played: matches.length,
+              event_name: eventName
             }
           ]);
       }
@@ -2245,6 +2332,85 @@ async function finishDay() {
     resultId: shareId,
     data: JSON.stringify(final)
   });
+
+
+
+  for (const player of final) {
+  const playerName = player.name.toLowerCase();
+
+  const matches = matchesByPlayer[playerName] || [];
+
+  // get current rating
+  const { data: existing } = await window.supabaseClient
+    .from("players")
+    .select("bite_strength")
+    .eq("name", player.name)
+    .single();
+
+  const oldRating = existing?.bite_strength ?? 50;
+
+  // you must resolve ratings for other players
+  const getRating = async (name) => {
+    const { data } = await window.supabaseClient
+      .from("players")
+      .select("bite_strength")
+      .eq("name", name)
+      .single();
+
+    return data?.bite_strength ?? 50;
+  };
+
+  let totalDelta = 0;
+
+  for (const match of matches) {
+    const R_partner = await getRating(match.partner);
+    const R_opp1 = await getRating(match.opp1);
+    const R_opp2 = await getRating(match.opp2);
+
+    const R_team = (oldRating + R_partner) / 2;
+    const R_opp = (R_opp1 + R_opp2) / 2;
+
+    let score_for = 0;
+    let score_against = 0;
+
+    match.scores.forEach(([a, b]) => {
+      score_for += a;
+      score_against += b;
+    });
+
+    const d = score_for - score_against;
+    const S = d > 0 ? 1 : 0;
+
+    const E = 1 / (1 + Math.pow(10, (R_opp - R_team) / 12));
+    const M = 1 + 0.75 * (Math.abs(d) / 12);
+
+    const delta = 0.75 * M * (S - E);
+
+    totalDelta += delta;
+  }
+
+  const newRating = oldRating + totalDelta;
+
+  // save updated rating
+  await window.supabaseClient
+    .from("players")
+    .upsert({
+      name: player.name,
+      bite_strength: newRating
+    });
+
+  // save history
+  await window.supabaseClient
+    .from("rating_history")
+    .insert({
+      player_name: player.name,
+      rating_before: oldRating,
+      rating_after: newRating,
+      event_name: eventName
+      delta: totalDelta,
+      matches_played: matches.length
+    });
+}
 
   updateDoneProgress(95);
   localStorage.setItem(`pbTracker_results_${todayKey()}`, buildResultsHtml(
@@ -3014,6 +3180,25 @@ function handleAnalyticsStatClick(kind) {
     openBestWeekdayModal(pk, deep?.weekdayRows || []);
     return;
   }
+  
+  if (kind === "biteStrength") {
+    const rows = buildRankedStatRows(
+      (lastModalTrend || []).map(player => ({
+        name: String(player.name || "").toLowerCase(),
+        value: player.biteStrength ? Number(player.biteStrength) : BITE_STRENGTH_BASE
+      })),
+      pk,
+      value => (value || BITE_STRENGTH_BASE).toFixed(2)
+    );
+    showAnalyticsModal(
+      "Bite Strength",
+      ["Rank", "Name", "Bite Strength"],
+      rows,
+      pk,
+      { noHighlight: false }
+    );
+    return;
+  }
 
   if (!stats || !stats[pk]) return;
 
@@ -3433,6 +3618,77 @@ function getBestPartner(sets, player) {
   return best;
 }
 
+
+
+
+// ===== BITE STRENGTH CALCULATION (ELO-LIKE RATING) =====
+function calculateBiteStrength(playerName, sets, trendData) {
+  const pl = String(playerName || "").toLowerCase();
+  if (!Array.isArray(sets)) sets = [];
+  if (!Array.isArray(trendData)) trendData = [];
+
+  // Get initial rating (or use base)
+  const playerTrend = trendData.find(p => String(p.name || "").toLowerCase() === pl);
+  let currentRating = playerTrend?.biteStrength ? Number(playerTrend.biteStrength) : BITE_STRENGTH_BASE;
+  
+  let totalDelta = 0;
+  const matches = [];
+
+  // Build match list with score deltas
+  sets.forEach(set => {
+    const teamA = (set.teamA || "").toLowerCase().split("/").map(p => p.trim());
+    const teamB = (set.teamB || "").toLowerCase().split("/").map(p => p.trim());
+    
+    const isPlayerA = teamA.includes(pl);
+    const isPlayerB = teamB.includes(pl);
+    if (!isPlayerA && !isPlayerB) return;
+
+    const myTeam = isPlayerA ? teamA : teamB;
+    const oppTeam = isPlayerA ? teamB : teamA;
+    
+    (set.scores || []).forEach(score => {
+      if (!score || !String(score).includes("-")) return;
+      
+      const [aScore, bScore] = score.split("-").map(Number);
+      const isWin = (isPlayerA && aScore > bScore) || (isPlayerB && bScore > aScore);
+      
+      const scoreDiff = isPlayerA ? (aScore - bScore) : (bScore - aScore);
+      const absDiff = Math.abs(scoreDiff);
+      
+      // Get partner rating (use base if not found)
+      const partner = myTeam.find(p => p !== pl);
+      const partnerObj = trendData.find(t => String(t.name || "").toLowerCase() === partner?.toLowerCase());
+      const R_partner = partnerObj?.biteStrength ? Number(partnerObj.biteStrength) : BITE_STRENGTH_BASE;
+      
+      // Get opponent ratings
+      const opp1Obj = trendData.find(t => String(t.name || "").toLowerCase() === oppTeam[0]?.toLowerCase());
+      const opp2Obj = trendData.find(t => String(t.name || "").toLowerCase() === oppTeam[1]?.toLowerCase());
+      const R_opp1 = opp1Obj?.biteStrength ? Number(opp1Obj.biteStrength) : BITE_STRENGTH_BASE;
+      const R_opp2 = opp2Obj?.biteStrength ? Number(opp2Obj.biteStrength) : BITE_STRENGTH_BASE;
+      
+      // Team ratings
+      const R_team = (currentRating + R_partner) / 2;
+      const R_opp = (R_opp1 + R_opp2) / 2;
+      
+      // Expected win probability
+      const E = 1 / (1 + Math.pow(10, (R_opp - R_team) / BITE_STRENGTH_D));
+      
+      // Margin multiplier
+      const M = 1 + BITE_STRENGTH_ALPHA * (absDiff / BITE_STRENGTH_MAX_SCORE);
+      
+      // Rating delta
+      const S = isWin ? 1 : 0;
+      const delta = BITE_STRENGTH_K * M * (S - E);
+      
+      totalDelta += delta;
+      matches.push({ delta, isWin, scoreDiff: absDiff });
+    });
+  });
+
+  const newRating = currentRating + totalDelta;
+  return Math.max(0, Math.round(newRating * 100) / 100); // Round to 2 decimals, min 0
+}
+
 function analyzePlayerFromSets(sets, player) {
   sets = sortSetsChronologically(sets || []);
   player = player.toLowerCase();
@@ -3581,6 +3837,9 @@ async function renderDashboardAnalytics(player) {
   const gamesPlayed = Number(
     playerStats.gamesPlayed ?? playerStats.games ?? countGamesPlayedInSets(allSets, pl)
   ) || 0;
+  
+  // Calculate Bite Strength
+  const biteStrength = calculateBiteStrength(pl, allSets, trend);
 
   const dropdownSorted = sortPlayersForDropdown(trend);
   lastModalBuildStats = buildPlayerStats(allSets);
@@ -3646,6 +3905,11 @@ async function renderDashboardAnalytics(player) {
         <div class="stat gray" role="button" tabindex="0" onclick="handleAnalyticsStatClick('games')">
           <div class="stat-title">Games Played</div>
           <div class="stat-value">${gamesPlayed}</div>
+        </div>
+
+        <div class="stat bite-strength-stat" role="button" tabindex="0" onclick="handleAnalyticsStatClick('biteStrength')">
+          <div class="stat-title">Rating</div>
+          <div class="stat-value">${biteStrength.toFixed(2)}</div>
         </div>
 
       </div>

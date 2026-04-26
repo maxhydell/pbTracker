@@ -450,7 +450,7 @@ h1, h2 {
 .leaderboard-header,
 .leaderboard-row {
   display: grid;
-  grid-template-columns: var(--leaderboard-grid, 60px 1.5fr 80px 100px);
+  grid-template-columns: var(--leaderboard-grid, 60px 1.5fr 80px 100px 120px);
   padding: 10px;
   column-gap: 1px;
   border-bottom: 1px solid rgba(255,255,255,0.1);
@@ -1573,6 +1573,10 @@ select.dash-player-select option,
 .stat.teal { border-left: 4px solid #00bcd4; }
 .stat.orange { border-left: 4px solid #ff9800; }
 .stat.gray { border-left: 4px solid #aaa; }
+.stat.bite-strength-stat { 
+  border-left: 4px solid #7c3aed; 
+  grid-column: 1 / -1;
+}
 
 /* —— RESULTS (day complete) —— */
 .day-results {
@@ -1993,7 +1997,7 @@ select.dash-player-select option,
   margin-top: auto;
   border-top: 1px solid rgba(255,255,255,0.08);
   padding: 16px;
-  padding-bottom: 32px; /* 👈 your “20px above bottom” */
+  padding-bottom: 16px; /* 👈 your “20px above bottom” */
   display: flex;
   justify-content: center;
 }
