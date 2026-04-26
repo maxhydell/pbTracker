@@ -2297,7 +2297,7 @@ sets.forEach(set => {
               Date: today,
               Player: player.name,
               WinPct: trend.winPct.toString(),
-              PointsAvg: trend.pointsAvg.toString()
+              PointsAvg: trend.pointsAvg.toString(),
               player_name: player.name,
               rating_before: oldRating,
               rating_after: newRating,
