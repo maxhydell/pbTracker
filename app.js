@@ -1460,20 +1460,8 @@ function bookCourt(date, button) {
     button.textContent = "Booking...";
   }
 
-  fetch("https://api.github.com/repos/max-hydell/courtreserve/actions/workflows/run.yml/dispatches", {
-    method: "POST",
-    headers: {
-      "Authorization": "Bearer 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",
-      "Accept": "application/vnd.github+json",
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-  ref: "main",
-  inputs: {
-    date: date
-  }
-})
-  })
+  fetch("https://courtreserve.maxhydell.workers.dev?date=" + date)
+  
   .then(res => {
     if (!res.ok) throw new Error("GitHub trigger failed");
 
