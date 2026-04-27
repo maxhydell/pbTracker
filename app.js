@@ -189,7 +189,7 @@ async function checkDeviceWhitelist() {
 }
 
 function isPlayersPageAccessAllowed() {
-  const id = getOrCreateDeviceId();
+  getOrCreateDeviceId();
   if (!window.supabaseClient) return false;
   if (localStorage.getItem(LS_DEVICE_VERIFIED) === "1") return true;
   return false;
@@ -216,6 +216,16 @@ async function loadCriticalPageData(pageId) {
   if (pageId === "schedule") {
     updateLoadingProgress(35, "Loading schedule...");
     await loadSchedule();
+    return;
+  }
+
+  if (pageId === "players") {
+    updateLoadingProgress(35, "Loading players...");
+    if (!playersCache.length) {
+      await loadPlayers();
+    }
+    updateLoadingProgress(80, "Building players...");
+    await loadPlayersList();
     return;
   }
 
@@ -351,7 +361,7 @@ function showAccessRestrictionPopup() {
   if (activeInput) activeInput.focus();
 }
 
-function verifyAccessCode() {
+async function verifyAccessCode() {
   const codeInput = [
     document.querySelector('.page.active #accessCode'),
     document.querySelector('.page.active #accessCodeSchedule'),
@@ -371,22 +381,11 @@ function verifyAccessCode() {
   const code = String(inputEl.value || "").trim();
 
   if (code === ACCESS_CODE) {
-    // Add device to whitelist
-    if (window.supabaseClient && deviceId) {
-      window.supabaseClient
-        .from("device_whitelist")
-        .insert([{ device_id: deviceId, timestamp: new Date().toISOString() }])
-        .then(({ error }) => {
-          if (error) {
-            console.error("❌ Failed to whitelist device:", error);
-          } else {
-            console.log("✅ Device added to whitelist");
-          }
-        });
+    const whitelisted = await ensureCurrentDeviceWhitelisted();
+    if (!whitelisted) {
+      console.error("❌ Failed to unlock access after correct code");
+      return;
     }
-
-    localStorage.setItem(LS_DEVICE_VERIFIED, "1");
-    isEditingLocked = false;
     console.log("✅ Access unlocked");
 
     [
@@ -534,7 +533,7 @@ function getRoutePage() {
   const params = new URLSearchParams(window.location.search);
   const page = params.get("page");
 
-  if (["input", "rankings", "schedule", "sets"].includes(page)) {
+  if (["input", "rankings", "schedule", "sets", "players"].includes(page)) {
     return page;
   }
 
@@ -554,7 +553,7 @@ function getRoutePage() {
 function getSiteBasePath() {
   const path = (window.location.pathname || "").replace(/\/+$/, "");
   const parts = path.split("/").filter(Boolean);
-  const subs = new Set(["rankings", "schedule", "sets", "share"]);
+  const subs = new Set(["rankings", "schedule", "sets", "players", "share"]);
   if (parts.length && subs.has(parts[parts.length - 1])) parts.pop();
   return parts.length ? `/${parts.join("/")}/` : "/";
 }
@@ -570,7 +569,8 @@ function buildHrefForPage(pageId) {
   const map = {
     rankings: "rankings/",
     schedule: "schedule/",
-    sets: "sets/"
+    sets: "sets/",
+    players: "players/"
   };
   return base + (map[pageId] || "") + q;
 }
@@ -720,25 +720,29 @@ async function loadPlayers() {
     try {
       const { data: supabasePlayerData, error } = await window.supabaseClient
         .from('Players')
-        .select('name, DUPR, PWRank, phone');
+        .select('id, name, DUPR, PWRank, phone, order_index');
 
       if (!error && supabasePlayerData) {
         // Merge Supabase data into playersCache
         const supabaseMap = {};
         supabasePlayerData.forEach(p => {
           supabaseMap[String(p.name).toLowerCase()] = {
+            id: p.id,
             DUPR: p.DUPR,
             PWRank: p.PWRank,
-            phone: p.phone
+            phone: p.phone,
+            order_index: p.order_index
           };
         });
 
         playersCache.forEach(p => {
           const supabaseData = supabaseMap[String(p.name).toLowerCase()];
           if (supabaseData) {
+            p.id = supabaseData.id;
             p.DUPR = supabaseData.DUPR;
             p.PWRank = supabaseData.PWRank;
-            if (supabaseData.phone) p.phone = supabaseData.phone;
+            p.phone = supabaseData.phone ?? "";
+            p.order_index = supabaseData.order_index;
           }
         });
       }
@@ -1073,11 +1077,21 @@ async function saveSet(setNumber) {
       return;
     }
 
-    // 🔥 CRITICAL FIX — CLEAR CACHE
-    Object.keys(memoryCache).forEach(k => delete memoryCache[k]);
+    await processSavedSetRatings(setNumber);
 
-    loadTodaySetsAll();
+    clearMemoryCache();
+    globalData.sets = null;
+    globalData.trend = null;
+    historyCache = [];
+
+    await loadTodaySetsAll();
     await loadRankings();
+    if (document.getElementById("players")?.classList.contains("active")) {
+      await loadPlayersList();
+    }
+    if (globalData.schedule || document.getElementById("schedule")?.classList.contains("active")) {
+      loadSchedule();
+    }
 
     // 🔥 re-apply AFTER DOM rebuild
     setTimeout(() => {
@@ -1104,8 +1118,8 @@ async function calculateSetRatings(setData, playersList) {
   
   if (!setData || !Array.isArray(playersList)) return [];
 
-  const teamA = (setData.teamA || "").split("/").map(p => p.trim().toLowerCase());
-  const teamB = (setData.teamB || "").split("/").map(p => p.trim().toLowerCase());
+  const teamA = (setData.teamA || "").split("/").map(p => p.trim().toLowerCase()).filter(Boolean);
+  const teamB = (setData.teamB || "").split("/").map(p => p.trim().toLowerCase()).filter(Boolean);
   
   // Get current power rankings for each player
   const getPlayerPWRank = (name) => {
@@ -1117,85 +1131,354 @@ async function calculateSetRatings(setData, playersList) {
   const teamAAvg = teamA.length ? teamA.reduce((sum, p) => sum + getPlayerPWRank(p), 0) / teamA.length : 50;
   const teamBAvg = teamB.length ? teamB.reduce((sum, p) => sum + getPlayerPWRank(p), 0) / teamB.length : 50;
 
-  const ratingChanges = [];
-  let totalTeamAWins = 0, totalTeamBWins = 0, totalTeamAPoints = 0, totalTeamBPoints = 0;
+  const validScores = (setData.scores || []).filter(score => score && score.includes("-"));
+  if (!validScores.length || !teamA.length || !teamB.length) return [];
 
-  // Sum up wins and points from all scores
-  (setData.scores || []).forEach(score => {
+  const ratingChanges = [];
+  let totalTeamAWins = 0;
+  let totalTeamBWins = 0;
+  let totalTeamAPoints = 0;
+  let totalTeamBPoints = 0;
+
+  validScores.forEach(score => {
     if (!score || !score.includes("-")) return;
     const [a, b] = score.split("-").map(Number);
+    totalTeamAPoints += a;
+    totalTeamBPoints += b;
     if (a > b) {
       totalTeamAWins++;
-      totalTeamAPoints += a;
-      totalTeamBPoints += b;
-    } else {
+    } else if (b > a) {
       totalTeamBWins++;
-      totalTeamAPoints += a;
-      totalTeamBPoints += b;
     }
   });
 
-  // Calculate rating delta for each player based on team result and strength differential
-  const maxRatingChange = 4;
-  const minRatingChange = -4;
+  const teamAWon = totalTeamAWins === totalTeamBWins
+    ? totalTeamAPoints > totalTeamBPoints
+    : totalTeamAWins > totalTeamBWins;
+  const totalPoints = Math.max(1, totalTeamAPoints + totalTeamBPoints);
+  const pointShareA = totalTeamAPoints / totalPoints;
+  const expectedShareA = 1 / (1 + Math.pow(10, (teamBAvg - teamAAvg) / 10));
+  const pointsInfluenceA = (pointShareA - 0.5) * 0.9;
+  const winsMargin = Math.abs(totalTeamAWins - totalTeamBWins) / Math.max(1, validScores.length);
+  const pointMargin = Math.abs(totalTeamAPoints - totalTeamBPoints) / totalPoints;
+  const closeMatchScale = 0.55 + (winsMargin * 0.55) + (pointMargin * 0.45);
+  const baseDeltaA = ((teamAWon ? 1 : 0) - expectedShareA + pointsInfluenceA) * (1.6 * closeMatchScale);
+  const baseDeltaB = -baseDeltaA;
 
-  teamA.forEach(playerName => {
-    const won = totalTeamAWins > totalTeamBWins;
-    const strengthDiff = teamAAvg - teamBAvg;
-    
-    let baseChange = won ? 1 : -0.5;
-    
-    if (strengthDiff < -5) {
-      baseChange *= won ? 1.5 : 1;
-    } else if (strengthDiff > 5) {
-      baseChange *= won ? 0.7 : 1.3;
-    }
+  const buildDelta = (playerName, deltaBValue, opponentAvg) => {
+    const playerRecord = playersList.find(p => p.name.toLowerCase() === playerName);
+    const deltaB = Number(deltaBValue.toFixed(3));
+    const deltaA = Number((deltaB * 1.4).toFixed(3));
 
-    const pointsScored = totalTeamAPoints / (setData.scores.length || 1);
-    const avgPointsExpected = (teamAAvg + teamBAvg) / 2;
-    baseChange += (pointsScored - avgPointsExpected) * 0.05;
-
-    const deltaA = Math.max(minRatingChange, Math.min(maxRatingChange, baseChange * 2));
-    const deltaB = baseChange;
-
-    ratingChanges.push({
-      player_name: playerName,
+    return {
+      player_name: playerRecord?.name || playerName,
       delta_A: deltaA,
       delta_B: deltaB,
-      opponent_avg: teamBAvg,
+      opponent_avg: Number(opponentAvg.toFixed(3)),
       set_data: setData
-    });
+    };
+  };
+
+  teamA.forEach(playerName => {
+    ratingChanges.push(buildDelta(playerName, baseDeltaA, teamBAvg));
   });
 
   teamB.forEach(playerName => {
-    const won = totalTeamBWins > totalTeamAWins;
-    const strengthDiff = teamBAvg - teamAAvg;
-    
-    let baseChange = won ? 1 : -0.5;
-    
-    if (strengthDiff < -5) {
-      baseChange *= won ? 1.5 : 1;
-    } else if (strengthDiff > 5) {
-      baseChange *= won ? 0.7 : 1.3;
-    }
-
-    const pointsScored = totalTeamBPoints / (setData.scores.length || 1);
-    const avgPointsExpected = (teamAAvg + teamBAvg) / 2;
-    baseChange += (pointsScored - avgPointsExpected) * 0.05;
-
-    const deltaA = Math.max(minRatingChange, Math.min(maxRatingChange, baseChange * 2));
-    const deltaB = baseChange;
-
-    ratingChanges.push({
-      player_name: playerName,
-      delta_A: deltaA,
-      delta_B: deltaB,
-      opponent_avg: teamAAvg,
-      set_data: setData
-    });
+    ratingChanges.push(buildDelta(playerName, baseDeltaB, teamAAvg));
   });
 
   return ratingChanges;
+}
+
+function clearMemoryCache() {
+  Object.keys(memoryCache).forEach(key => delete memoryCache[key]);
+}
+
+function getTodayEventId() {
+  return new Date().toISOString().split("T")[0];
+}
+
+async function ensureCurrentDeviceWhitelisted() {
+  if (!window.supabaseClient) return false;
+
+  const id = deviceId || getOrCreateDeviceId();
+
+  try {
+    const { error } = await window.supabaseClient
+      .from("device_whitelist")
+      .upsert([{ device_id: id, timestamp: new Date().toISOString() }], { onConflict: "device_id" });
+
+    if (error) {
+      console.error("❌ Failed to whitelist device:", error);
+      return false;
+    }
+
+    localStorage.setItem(LS_DEVICE_VERIFIED, "1");
+    isEditingLocked = false;
+    return true;
+  } catch (err) {
+    console.error("❌ Failed to whitelist device:", err);
+    return false;
+  }
+}
+
+async function getSavedSetData(setNumber) {
+  const refreshedSets = await callAPI({ action: "getTodaySets" }, { force: true });
+  globalData.sets = refreshedSets;
+  lastTodaySetsData = refreshedSets;
+  const setData = (refreshedSets || []).find(set => Number(set.set) === Number(setNumber));
+
+  return setData || null;
+}
+
+async function persistRatingHistorySnapshot(players, eventId, setNumber) {
+  if (!window.supabaseClient || !Array.isArray(players) || !players.length) return;
+
+  const rows = players.map(player => ({
+    player_name: player.name,
+    rating_before: Number(player.DUPR || 0),
+    rating_after: Number(player.PWRank || 0),
+    event_name: `${eventId}:set:${setNumber}`,
+    delta: 0,
+    matches_played: 1
+  }));
+
+  try {
+    const { error } = await window.supabaseClient
+      .from("rating_history")
+      .insert(rows);
+
+    if (error) {
+      console.error("❌ Failed to save rating history snapshot:", error);
+    }
+  } catch (err) {
+    console.error("❌ Failed to save rating history snapshot:", err);
+  }
+}
+
+async function applyPlayerRatingBatch(playerUpdates) {
+  if (!window.supabaseClient || !Array.isArray(playerUpdates) || !playerUpdates.length) {
+    return { ok: true };
+  }
+
+  const canBatchById = playerUpdates.every(update => update.id);
+
+  if (canBatchById) {
+    const payload = playerUpdates.map(update => ({
+      id: update.id,
+      DUPR: update.nextDupr,
+      PWRank: update.nextPWRank
+    }));
+
+    const { error } = await window.supabaseClient
+      .from("Players")
+      .upsert(payload, { onConflict: "id" });
+
+    if (error) {
+      return { ok: false, error };
+    }
+
+    return { ok: true };
+  }
+
+  const applied = [];
+  for (const update of playerUpdates) {
+    const updateQuery = window.supabaseClient
+      .from("Players")
+      .update({
+        DUPR: update.nextDupr,
+        PWRank: update.nextPWRank
+      });
+
+    const { error } = update.id
+      ? await updateQuery.eq("id", update.id)
+      : await updateQuery.ilike("name", update.name);
+
+    if (error) {
+      return {
+        ok: false,
+        error,
+        applied
+      };
+    }
+
+    applied.push(update);
+  }
+
+  return { ok: true };
+}
+
+async function rollbackPlayerRatingBatch(playerUpdates) {
+  if (!window.supabaseClient || !Array.isArray(playerUpdates) || !playerUpdates.length) {
+    return { ok: true };
+  }
+
+  const canBatchById = playerUpdates.every(update => update.id);
+
+  if (canBatchById) {
+    const payload = playerUpdates.map(update => ({
+      id: update.id,
+      DUPR: update.originalDupr,
+      PWRank: update.originalPWRank
+    }));
+
+    const { error } = await window.supabaseClient
+      .from("Players")
+      .upsert(payload, { onConflict: "id" });
+
+    if (error) {
+      return { ok: false, error };
+    }
+
+    return { ok: true };
+  }
+
+  for (const update of playerUpdates) {
+    const updateQuery = window.supabaseClient
+      .from("Players")
+      .update({
+        DUPR: update.originalDupr,
+        PWRank: update.originalPWRank
+      });
+
+    const { error } = update.id
+      ? await updateQuery.eq("id", update.id)
+      : await updateQuery.ilike("name", update.name);
+
+    if (error) {
+      return { ok: false, error };
+    }
+  }
+
+  return { ok: true };
+}
+
+async function processSavedSetRatings(setNumber) {
+  if (!window.supabaseClient) return;
+
+  try {
+    if (!playersCache.length) {
+      await loadPlayers();
+    }
+
+    const eventId = getTodayEventId();
+    const { data: existingLog, error: existingLogError } = await window.supabaseClient
+      .from("match_rating_logs")
+      .select("id")
+      .eq("event_id", eventId)
+      .eq("set_number", Number(setNumber))
+      .limit(1);
+
+    if (existingLogError) {
+      console.error("❌ Failed to check match rating logs:", existingLogError);
+      return;
+    }
+
+    if (existingLog && existingLog.length > 0) {
+      console.log("⚠️ Ratings already processed for set", setNumber);
+      await loadPlayers();
+      return;
+    }
+
+    const setData = await getSavedSetData(setNumber);
+    if (!setData) {
+      console.warn("⚠️ No set data found for rating update:", setNumber);
+      return;
+    }
+
+    const ratingChanges = await calculateSetRatings(setData, playersCache);
+    if (!ratingChanges.length) {
+      console.warn("⚠️ No rating changes calculated for set", setNumber);
+      return;
+    }
+
+    const playerUpdates = [];
+    for (const change of ratingChanges) {
+      const playerRecord = playersCache.find(player =>
+        String(player.name || "").toLowerCase() === String(change.player_name || "").toLowerCase()
+      );
+
+      if (!playerRecord) {
+        console.warn("⚠️ Missing player in playersCache for rating update:", change.player_name);
+        return;
+      }
+
+      playerUpdates.push({
+        id: playerRecord.id || null,
+        name: playerRecord.name,
+        originalDupr: Number(playerRecord.DUPR || 0),
+        originalPWRank: Number(playerRecord.PWRank || 50),
+        nextDupr: Number((Number(playerRecord.DUPR || 0) + Number(change.delta_A || 0)).toFixed(3)),
+        nextPWRank: Number((Number(playerRecord.PWRank || 50) + Number(change.delta_B || 0)).toFixed(3))
+      });
+    }
+
+    const logRows = ratingChanges.map(change => ({
+      player_name: change.player_name,
+      event_id: eventId,
+      set_number: Number(setNumber),
+      delta_A: change.delta_A,
+      delta_B: change.delta_B,
+      opponent_avg: change.opponent_avg,
+      timestamp: new Date().toISOString()
+    }));
+
+    const playerUpdateResult = await applyPlayerRatingBatch(playerUpdates);
+    if (!playerUpdateResult.ok) {
+      console.error("❌ Failed to update player ratings:", playerUpdateResult.error);
+      if (Array.isArray(playerUpdateResult.applied) && playerUpdateResult.applied.length) {
+        const rollbackResult = await rollbackPlayerRatingBatch(playerUpdateResult.applied);
+        if (!rollbackResult.ok) {
+          console.error("❌ Failed to roll back partially applied player ratings:", rollbackResult.error);
+        }
+      }
+      return;
+    }
+
+    const { error: logInsertError } = await window.supabaseClient
+      .from("match_rating_logs")
+      .insert(logRows);
+
+    if (logInsertError) {
+      console.error("❌ Failed to save match rating logs:", logInsertError);
+
+      const rollbackResult = await rollbackPlayerRatingBatch(playerUpdates);
+      if (!rollbackResult.ok) {
+        console.error("❌ Failed to roll back player ratings after log insert failure:", rollbackResult.error);
+      }
+      return;
+    }
+
+    playerUpdates.forEach(update => {
+      const playerRecord = playersCache.find(player =>
+        String(player.name || "").toLowerCase() === String(update.name || "").toLowerCase()
+      );
+      if (playerRecord) {
+        playerRecord.DUPR = update.nextDupr;
+        playerRecord.PWRank = update.nextPWRank;
+      }
+    });
+
+    await persistRatingHistorySnapshot(
+      playerUpdates.map(update => {
+        const playerRecord = playersCache.find(player =>
+          String(player.name || "").toLowerCase() === String(update.name || "").toLowerCase()
+        );
+        return {
+          name: playerRecord?.name || update.name,
+          DUPR: playerRecord?.DUPR || 0,
+          PWRank: playerRecord?.PWRank || 0
+        };
+      }),
+      eventId,
+      setNumber
+    );
+
+    clearMemoryCache();
+    await loadPlayers();
+  } catch (err) {
+    console.error("❌ Failed to process saved set ratings:", err);
+  }
 }
 
 function calculatePredictedScore(teamAAvg, teamBAvg, baseWinPts = 11) {
@@ -1780,13 +2063,11 @@ data = Array.from({ length: 5 }, (_, i) => {
     }
 
     function getPowerRankingForPlayer(name) {
-      if (!name || !window.supabaseClient) return 0;
-      // This will be called with player name, we need to look it up in our cache or fetch
-      // For now, return a default value - we'll load it asynchronously
+      if (!name) return 0;
       const player = playersCache.find(p =>
         p.name.toLowerCase() === String(name).toLowerCase()
       );
-      return player?.PWRank || player?.biteStrength || 0;
+      return player?.PWRank || 0;
     }
 
     const container = document.getElementById("scheduleList");
@@ -1928,7 +2209,7 @@ async function loadPlayersList() {
         <div class="players-access-card">
           <h3>⚠️ Access Required</h3>
           <p>Enter the access code to view the players list.</p>
-          <input type="password" id="playersAccessCode" class="players-access-input" placeholder="Enter access code" />
+          <input type="password" id="playersAccessCode" class="players-access-input" placeholder="Enter access code" onkeypress="if(event.key==='Enter') verifyPlayersAccessCode()" />
           <button class="players-access-btn" onclick="verifyPlayersAccessCode()">Unlock</button>
         </div>
       `;
@@ -1936,31 +2217,19 @@ async function loadPlayersList() {
       return;
     }
 
-    // Load players from Supabase
-    if (!window.supabaseClient) {
-      container.innerHTML = '<div class="players-empty"><h2>Unable to load players</h2></div>';
-      return;
-    }
-
-    const { data: playersData, error } = await window.supabaseClient
-      .from('Players')
-      .select('*')
-      .order('name');
-
-    if (error || !playersData) {
-      console.error("❌ Failed to load players:", error);
-      container.innerHTML = '<div class="players-empty"><h2>Error loading players</h2></div>';
-      return;
+    if (!playersCache.length) {
+      await loadPlayers();
     }
 
     // Get all sets for games count
     const allSets = (await getAllSets()) || [];
 
-    // Load user's preferred player order from localStorage
-    const userOrderPref = JSON.parse(localStorage.getItem("pbTracker_playersOrder") || "[]");
-
-    // Sort players by user preference or alphabetically
-    const sortedPlayers = sortPlayersByPreference(playersData, userOrderPref);
+    const sortedPlayers = [...playersCache].sort((a, b) => {
+      const orderA = Number.isFinite(Number(a.order_index)) ? Number(a.order_index) : Number.MAX_SAFE_INTEGER;
+      const orderB = Number.isFinite(Number(b.order_index)) ? Number(b.order_index) : Number.MAX_SAFE_INTEGER;
+      if (orderA !== orderB) return orderA - orderB;
+      return String(a.name || "").localeCompare(String(b.name || ""));
+    });
 
     if (!sortedPlayers || sortedPlayers.length === 0) {
       container.innerHTML = '<div class="players-empty"><h2>No players found</h2></div>';
@@ -1975,8 +2244,8 @@ async function loadPlayersList() {
         <div>Order</div>
         <div>Name</div>
         <div>Rating</div>
-        <div>Games</div>
-        <div>Phone</div>
+        <div>Games Played</div>
+        <div>Phone Number</div>
       </div>
     `;
 
@@ -1990,7 +2259,10 @@ async function loadPlayersList() {
         <div class="players-row" draggable="true" data-player-id="${player.id}" data-index="${index}" 
              ondragstart="handlePlayerDragStart(event)" ondragover="handlePlayerDragOver(event)" 
              ondrop="handlePlayerDrop(event)" ondragend="handlePlayerDragEnd(event)">
-          <div class="players-order-handle">=</div>
+          <div class="players-order-cell">
+            <span class="players-order-number">${index + 1}</span>
+            <span class="players-order-handle">≡</span>
+          </div>
           <div class="players-name">${escapeHtml(capitalize(player.name))}</div>
           <div class="players-rating">${rating}</div>
           <div class="players-games">${gamesPlayed}</div>
@@ -2019,36 +2291,51 @@ async function loadPlayersList() {
   }
 }
 
-function sortPlayersByPreference(players, userOrder) {
-  if (!Array.isArray(userOrder) || userOrder.length === 0) {
-    return [...players].sort((a, b) => String(a.name).localeCompare(String(b.name)));
-  }
-
-  const playerMap = {};
-  players.forEach(p => {
-    playerMap[String(p.id)] = p;
-  });
-
-  const sorted = [];
-  userOrder.forEach(id => {
-    if (playerMap[id]) sorted.push(playerMap[id]);
-  });
-
-  // Add any players not in the user's order
-  players.forEach(p => {
-    if (!sorted.find(sp => sp.id === p.id)) {
-      sorted.push(p);
+function updatePlayersOrderNumbers() {
+  document.querySelectorAll(".players-row").forEach((row, index) => {
+    row.dataset.index = String(index);
+    const numberEl = row.querySelector(".players-order-number");
+    if (numberEl) {
+      numberEl.innerText = String(index + 1);
     }
   });
-
-  return sorted;
 }
 
-function savePlayersOrder() {
-  const rows = document.querySelectorAll(".players-row");
-  const order = Array.from(rows).map(row => row.dataset.playerId);
-  localStorage.setItem("pbTracker_playersOrder", JSON.stringify(order));
-  console.log("✅ Players order saved:", order);
+async function persistPlayersOrder() {
+  if (!window.supabaseClient) return;
+
+  const rows = Array.from(document.querySelectorAll(".players-row"));
+  const updates = rows
+    .map((row, index) => ({
+      id: row.dataset.playerId,
+      order_index: index + 1
+    }))
+    .filter(row => row.id);
+
+  if (!updates.length) return;
+
+  try {
+    for (const update of updates) {
+      const { error } = await window.supabaseClient
+        .from("Players")
+        .update({ order_index: update.order_index })
+        .eq("id", update.id);
+
+      if (error) {
+        console.error("❌ Failed to save players order:", error);
+        return;
+      }
+    }
+
+    updates.forEach(update => {
+      const player = playersCache.find(entry => String(entry.id) === String(update.id));
+      if (player) {
+        player.order_index = update.order_index;
+      }
+    });
+  } catch (err) {
+    console.error("❌ Failed to persist players order:", err);
+  }
 }
 
 let draggedPlayer = null;
@@ -2093,7 +2380,8 @@ function handlePlayerDrop(e) {
 function handlePlayerDragEnd(e) {
   e.currentTarget.classList.remove("dragging");
   draggedPlayer = null;
-  savePlayersOrder();
+  updatePlayersOrderNumbers();
+  persistPlayersOrder();
 }
 
 function setupPlayersDragDrop() {
@@ -2143,7 +2431,6 @@ function closePhoneModal(playerId) {
 }
 
 async function savePlayerPhone(playerId, playerName) {
-  const input = document.getElementById(`phone-${playerId}`);
   const phoneValue = document.getElementById(`phoneInput-${playerId}`)?.value || "";
 
   if (!window.supabaseClient) {
@@ -2164,9 +2451,13 @@ async function savePlayerPhone(playerId, playerName) {
     }
 
     console.log("✅ Phone saved for", playerName);
+    const player = playersCache.find(entry => String(entry.id) === String(playerId));
+    if (player) {
+      player.phone = phoneValue;
+    }
     closePhoneModal(playerId);
     
-    // Reload the players list
+    await loadPlayers();
     await loadPlayersList();
   } catch (err) {
     console.error("❌ Exception saving phone:", err);
@@ -2174,13 +2465,17 @@ async function savePlayerPhone(playerId, playerName) {
   }
 }
 
-function verifyPlayersAccessCode() {
+async function verifyPlayersAccessCode() {
   const codeInput = document.getElementById("playersAccessCode");
   const code = codeInput?.value?.trim();
 
   if (code === ACCESS_CODE) {
-    localStorage.setItem(LS_DEVICE_VERIFIED, "1");
-    loadPlayersList();
+    const whitelisted = await ensureCurrentDeviceWhitelisted();
+    if (!whitelisted) {
+      alert("❌ Unable to whitelist this device right now");
+      return;
+    }
+    await loadPlayersList();
   } else {
     alert("❌ Incorrect access code");
     codeInput.value = "";
@@ -2192,7 +2487,7 @@ function getPowerRankingForPlayer(name) {
   const player = playersCache.find(p =>
     p.name.toLowerCase() === String(name).toLowerCase()
   );
-  return Number(player?.PWRank || player?.biteStrength || 0);
+  return Number(player?.PWRank || 0);
 }
 
 function showSuccess(id) {
@@ -2268,14 +2563,15 @@ async function loadRankings(options = {}) {
   const player = data.find(p => p.name.toLowerCase() === selectedPlayer);
   if (!player) return;
 
-  // Get all sets once for Power Rating calculations
-  const allSetsForRatings = (await getAllSets()) || [];
-
   const bigStatEl = document.getElementById("bigStat");
   const topPercentEl = document.getElementById("topPercent");
   if (bigStatEl) {
-    // Load DUPR (Rating A) from Supabase Players table
+    if (!playersCache.length) {
+      await loadPlayers();
+    }
+
     let duprValue = null;
+    let pwRankValue = null;
     if (window.supabaseClient) {
       try {
         const { data: playerData, error } = await window.supabaseClient
@@ -2286,24 +2582,34 @@ async function loadRankings(options = {}) {
 
         if (!error && playerData) {
           duprValue = Number(playerData.DUPR) || null;
+          pwRankValue = Number(playerData.PWRank) || null;
         }
       } catch (err) {
         console.error("❌ Failed to fetch DUPR from Supabase:", err);
       }
     }
 
-    // Display DUPR if available, otherwise calculate
+    if (duprValue === null || pwRankValue === null) {
+      const cachedPlayer = playersCache.find(p => p.name.toLowerCase() === selectedPlayer);
+      if (duprValue === null && cachedPlayer) {
+        duprValue = Number(cachedPlayer.DUPR) || 0;
+      }
+      if (pwRankValue === null && cachedPlayer) {
+        pwRankValue = Number(cachedPlayer.PWRank) || 0;
+      }
+    }
+
     if (duprValue !== null) {
       bigStatEl.innerText = duprValue.toFixed(3);
       console.log("✅ Displaying DUPR from Supabase:", duprValue);
     } else {
-      const biteStrength = calculateBiteStrength(selectedPlayer, allSetsForRatings, data);
-      bigStatEl.innerText = biteStrength.toFixed(2);
+      bigStatEl.innerText = "--";
     }
     
-    // Update label to show DUPR Alternative
     if (topPercentEl) {
-      topPercentEl.innerText = "DUPR Alternative";
+      topPercentEl.innerText = pwRankValue !== null
+        ? `PWRank ${pwRankValue.toFixed(3)}`
+        : "PWRank --";
     }
     
     // 🔥 EARLY EXIT FOR RANKINGS PAGE
@@ -2411,13 +2717,6 @@ async function loadRankings(options = {}) {
     p.winPct > 0 || p.pointsAvg > 0
   ).sort((a, b) => b.winPct - a.winPct);
 
-  // Calculate Power Rating for all players (reuse allSetsForRatings from above)
-  filtered.forEach(player => {
-    if (!player.biteStrength) {
-      player.biteStrength = calculateBiteStrength(player.name, allSetsForRatings, data);
-    }
-  });
-
   renderLeaderboard(filtered);
   endTimer("Rankings Graph + Leaderboard");
 }
@@ -2493,7 +2792,7 @@ function capitalize(name) {
 }
 
 
-const pages = ["rankings","schedule","sets","input"];
+const pages = ["rankings","schedule","sets","players","input"];
 let currentPage = 0;
 
 
@@ -2699,9 +2998,6 @@ async function finishDay() {
   updateDoneProgress(25);
   const after = await callAPI({ action: "getUserTrend" }, { force: true });
 
-
-  const eventName = new Date().toISOString().split("T")[0];
-
   // 🔥 4. GET TODAY SETS (for wins + points)
   updateDoneProgress(35);
   const sets = await callAPI({ action: "getTodaySets" });
@@ -2788,49 +3084,6 @@ async function finishDay() {
   setDayComplete(true);
   updateDoneUiVisibility();
 
-
-// 🚫 prevent double processing
-const { data: existing } = await window.supabaseClient
-  .from("rating_history")
-  .select("id")
-  .eq("event_name", eventName)
-  .limit(1);
-
-let skipRatings = false;
-
-if (existing && existing.length > 0) {
-  console.log("⚠️ Event already processed, skipping ratings");
-  skipRatings = true;
-}
-
-const matchesByPlayer = {};
-
-sets.forEach(set => {
-  const teamA = set.teamA.split("/").map(p => p.trim().toLowerCase());
-  const teamB = set.teamB.split("/").map(p => p.trim().toLowerCase());
-
-  const scores = set.scores
-    .filter(s => s && s.includes("-"))
-    .map(s => s.split("-").map(Number));
-
-  [...teamA, ...teamB].forEach(player => {
-    if (!matchesByPlayer[player]) matchesByPlayer[player] = [];
-  });
-
-  [...teamA, ...teamB].forEach(player => {
-    const isTeamA = teamA.includes(player);
-
-    matchesByPlayer[player].push({
-      partner: isTeamA ? teamA.find(p => p !== player) : teamB.find(p => p !== player),
-      opp1: isTeamA ? teamB[0] : teamA[0],
-      opp2: isTeamA ? teamB[1] : teamA[1],
-      scores
-    });
-  });
-});
-
-
-
   // ===== SAVE HISTORY TO SUPABASE =====
   updateDoneProgress(80);
   try {
@@ -2875,85 +3128,6 @@ sets.forEach(set => {
     resultId: shareId,
     data: JSON.stringify(final)
   });
-
-
-
-  for (const player of final) {
-  const playerName = player.name.toLowerCase();
-
-  const matches = matchesByPlayer[playerName] || [];
-
-  // get current rating
-  const { data: existing } = await window.supabaseClient
-    .from("players")
-    .select("bite_strength")
-    .eq("name", player.name)
-    .single();
-
-  const oldRating = existing?.bite_strength ?? 50;
-
-  // you must resolve ratings for other players
-  const getRating = async (name) => {
-    const { data } = await window.supabaseClient
-      .from("players")
-      .select("bite_strength")
-      .eq("name", name)
-      .single();
-
-    return data?.bite_strength ?? 50;
-  };
-
-  let totalDelta = 0;
-
-  for (const match of matches) {
-    const R_partner = await getRating(match.partner);
-    const R_opp1 = await getRating(match.opp1);
-    const R_opp2 = await getRating(match.opp2);
-
-    const R_team = (oldRating + R_partner) / 2;
-    const R_opp = (R_opp1 + R_opp2) / 2;
-
-    let score_for = 0;
-    let score_against = 0;
-
-    match.scores.forEach(([a, b]) => {
-      score_for += a;
-      score_against += b;
-    });
-
-    const d = score_for - score_against;
-    const S = d > 0 ? 1 : 0;
-
-    const E = 1 / (1 + Math.pow(10, (R_opp - R_team) / 12));
-    const M = 1 + 0.75 * (Math.abs(d) / 12);
-
-    const delta = 0.75 * M * (S - E);
-
-    totalDelta += delta;
-  }
-
-  const newRating = oldRating + totalDelta;
-
-  // save updated rating
-  await window.supabaseClient
-    .from("players")
-    .upsert({
-      name: player.name,
-      bite_strength: newRating
-    });
-
-  // save history
-  await window.supabaseClient
-    .from("rating_history")
-    .insert({
-      player_name: player.name,
-      rating_before: oldRating,
-      rating_after: newRating,
-      event_name: eventName,
-      delta: totalDelta,
-      matches_played: matches.length
-    });
-}
 
   updateDoneProgress(95);
   localStorage.setItem(`pbTracker_results_${todayKey()}`, buildResultsHtml(
@@ -3726,12 +3900,12 @@ function handleAnalyticsStatClick(kind) {
   
   if (kind === "biteStrength") {
     const rows = buildRankedStatRows(
-      (lastModalTrend || []).map(player => ({
+      (playersCache || []).map(player => ({
         name: String(player.name || "").toLowerCase(),
-        value: player.biteStrength ? Number(player.biteStrength) : BITE_STRENGTH_BASE
+        value: Number(player.PWRank || 0)
       })),
       pk,
-      value => (value || BITE_STRENGTH_BASE).toFixed(2)
+      value => Number(value || 0).toFixed(2)
     );
     showAnalyticsModal(
       "Power Rating",
@@ -4380,9 +4554,9 @@ async function renderDashboardAnalytics(player) {
   const gamesPlayed = Number(
     playerStats.gamesPlayed ?? playerStats.games ?? countGamesPlayedInSets(allSets, pl)
   ) || 0;
-  
-  // Calculate Power Rating
-  const biteStrength = calculateBiteStrength(pl, allSets, trend);
+  const playerRating = Number(
+    playersCache.find(entry => entry.name.toLowerCase() === pl)?.PWRank || 0
+  );
 
   const dropdownSorted = sortPlayersForDropdown(trend);
   lastModalBuildStats = buildPlayerStats(allSets);
@@ -4452,7 +4626,7 @@ async function renderDashboardAnalytics(player) {
 
         <div class="stat bite-strength-stat" role="button" tabindex="0" onclick="handleAnalyticsStatClick('biteStrength')">
           <div class="stat-title">Rating</div>
-          <div class="stat-value">${biteStrength.toFixed(2)}</div>
+          <div class="stat-value">${playerRating.toFixed(2)}</div>
         </div>
 
       </div>

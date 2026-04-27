@@ -2136,11 +2136,25 @@ select.dash-player-select option,
   cursor: grabbing;
 }
 
+.players-order-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.players-order-number {
+  min-width: 14px;
+  color: #bbb;
+  font-size: 13px;
+  font-weight: 700;
+  text-align: right;
+}
+
 .players-order-handle {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 18px;
+  font-size: 16px;
   color: #666;
   cursor: grab;
   transition: color 0.2s ease;
