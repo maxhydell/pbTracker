@@ -1234,7 +1234,7 @@ if (gamesPlayed > 5) {
 
   // auto mark as sent
   const check = btn.parentElement.querySelector(".check-btn");
-  check.src = "orange.png";
+  check.src = "/orange.png";
   check.dataset.state = 1;
 
   callAPI({
@@ -1296,7 +1296,7 @@ function toggleCheck(btn, date, col) {
 
   // 🔴 0 → 1 (sent)
   if (state === 0) {
-    btn.src = "orange.png";
+    btn.src = "/orange.png";
     btn.dataset.state = 1;
 
     scheduleDirty = true;
@@ -1638,7 +1638,7 @@ data = Array.from({ length: 5 }, (_, i) => {
                 const status = row.status?.[col] || 0;
 
                 let img = "/white.png";
-                if (status == 1) img = "orange.png";
+                if (status == 1) img = "/orange.png";
                 if (status == 2) img = "/green.png";
 
                 return `
