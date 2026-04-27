@@ -1454,35 +1454,36 @@ function bookCourt(date, button) {
 
   console.log("🎾 Book Court clicked", { date });
 
+  const url = "https://app.courtreserve.com/Online/Reservations/Index/9529";
+
+  // UI feedback
   if (button) {
     button.disabled = true;
     button.classList.add("is-booked");
-    button.textContent = "Booking...";
+    button.textContent = "Opening...";
   }
 
-  fetch("https://courtreserve.maxhydell.workers.dev?date=" + date)
-  
-  .then(res => {
-    if (!res.ok) throw new Error("GitHub trigger failed");
+  const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 
-    console.log("✅ Bot triggered");
+  if (isMobile) {
+    // Try app / direct open
+    window.location.href = url;
 
-    // ✅ ONLY mark as booked AFTER success
-    setBookCourtDone(date);
+    // Fallback to browser tab if app doesn't open
+    setTimeout(() => {
+      window.open(url, "_blank");
+    }, 800);
+  } else {
+    // Desktop → open new tab
+    window.open(url, "_blank");
+  }
 
-    if (button) {
-      button.textContent = "Court Booked";
-    }
-  })
-  .catch(err => {
-    console.error("❌ Booking failed:", err);
+  // Mark as "done" immediately since it's manual now
+  setBookCourtDone(date);
 
-    if (button) {
-      button.disabled = false;
-      button.classList.remove("is-booked");
-      button.textContent = "Retry Booking";
-    }
-  });
+  if (button) {
+    button.textContent = "Opened Booking";
+  }
 }
 
 let scheduleLoading = false;
