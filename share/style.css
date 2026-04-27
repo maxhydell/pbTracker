@@ -369,6 +369,7 @@ body.install-modal-open {
 .dashboard-analytics-host {
   width: 100%;
   text-align: left;
+  margin: 0 auto;
 }
 
 .leaderboard-host {
@@ -639,15 +640,12 @@ body.install-modal-open {
 
 .analytics-main {
   background: rgba(20, 20, 20, 0.9);
-  margin-left: calc(50% - 50vw + 25px);
-  margin-right: calc(50% - 50vw + 22px);
   padding: 15px;
   border-radius: 16px;
   margin-bottom: 20px;
   margin-top: 20px;
   border: 1px solid rgba(255, 255, 255, 0.06);
-  width: auto;
-  max-width: none;
+  width: 100%;
 }
 
 .analytics-main,

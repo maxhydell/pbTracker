@@ -27,10 +27,11 @@ function setHeroTitleWithLogo() {
 function updateFeatureNavLinks() {
   const p = getPlayerFromURL();
   const qs = p ? `?p=${encodeURIComponent(p)}` : "";
-  const bases = ["/rankings/", "/schedule/", "/sets/"];
+  const bases = ["/rankings/", "/schedule/", "/sets/", "/"];
   document.querySelectorAll("a[data-feature-link]").forEach((a, i) => {
-    if (i < 3) a.href = `${bases[i]}${qs}`;
-    else if (i === 3) a.href = `/${qs}`;
+    if (i < bases.length) {
+      a.href = `${bases[i]}${qs}`;
+    }
   });
 }
 
