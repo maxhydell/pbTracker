@@ -909,7 +909,7 @@ function renderSetsInto(container, data, opts = {}) {
 
             ${isGame3Locked && !locked ? `
               <div style="text-align:right; margin-top:4px;">
-                <img src="unlock.png"
+                <img src="/unlock.png"
                   onclick="unlockGame(${match.set}, ${i})"
                   style="width:14px; opacity:0.7; cursor:pointer;">
               </div>
