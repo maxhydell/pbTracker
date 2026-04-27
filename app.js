@@ -1194,7 +1194,12 @@ function sendSMS(btn, date, col) {
 
   if (!player || !player.phone) return alert("No phone");
 
-  const day = new Date(date).toLocaleDateString("en-US",{weekday:"long"});
+  // Parse the date correctly, accounting for UTC offset
+  const dateObj = new Date(date);
+  // Add the UTC offset to get the correct local date
+  const offset = dateObj.getTimezoneOffset() * 60000;
+  const localDate = new Date(dateObj.getTime() + offset);
+  const day = localDate.toLocaleDateString("en-US", {weekday:"long"});
 
 const gamesPlayed = player.games || 0;
 
@@ -1819,8 +1824,8 @@ async function loadRankings(options = {}) {
     margin = Math.ceil(rangeFromLatest * 1.15); // Add 15% buffer
   }
 
-  const max = latest + margin;
-  const min = latest - margin;
+  const max = Math.round((latest + margin) * 10) / 10;
+  const min = Math.round((latest - margin) * 10) / 10;
 
   const chartEl = document.getElementById("chart");
   if (!chartEl) return;
@@ -2311,12 +2316,7 @@ sets.forEach(set => {
               Player: player.name,
               WinPct: trend.winPct.toString(),
               PointsAvg: trend.pointsAvg.toString(),
-              player_name: player.name,
-              rating_before: oldRating,
-              rating_after: newRating,
-              delta: totalDelta,
-              matches_played: matches.length,
-              event_name: eventName
+              player_name: player.name
             }
           ]);
       }
