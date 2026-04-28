@@ -1596,7 +1596,9 @@ select.dash-player-select option,
 .stat.gray { border-left: 4px solid #aaa; }
 .stat.bite-strength-stat { 
   border-left: 4px solid #7c3aed; 
-  grid-column: 1 / -1;
+}
+.stat.dupr-alt-stat {
+  border-left: 4px solid #14b8a6;
 }
 
 /* —— RESULTS (day complete) —— */

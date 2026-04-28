@@ -719,7 +719,7 @@ async function loadPlayers() {
   if (window.supabaseClient && Array.isArray(playersCache)) {
     try {
       const { data: supabasePlayerData, error } = await window.supabaseClient
-        .from('Players')
+        .from('players')
         .select('id, name, DUPR, PWRank, phone, order_index');
 
       if (!error && supabasePlayerData) {
@@ -1271,7 +1271,7 @@ async function applyPlayerRatingBatch(playerUpdates) {
     }));
 
     const { error } = await window.supabaseClient
-      .from("Players")
+      .from("players")
       .upsert(payload, { onConflict: "id" });
 
     if (error) {
@@ -1284,7 +1284,7 @@ async function applyPlayerRatingBatch(playerUpdates) {
   const applied = [];
   for (const update of playerUpdates) {
     const updateQuery = window.supabaseClient
-      .from("Players")
+      .from("players")
       .update({
         DUPR: update.nextDupr,
         PWRank: update.nextPWRank
@@ -1323,7 +1323,7 @@ async function rollbackPlayerRatingBatch(playerUpdates) {
     }));
 
     const { error } = await window.supabaseClient
-      .from("Players")
+      .from("players")
       .upsert(payload, { onConflict: "id" });
 
     if (error) {
@@ -1335,7 +1335,7 @@ async function rollbackPlayerRatingBatch(playerUpdates) {
 
   for (const update of playerUpdates) {
     const updateQuery = window.supabaseClient
-      .from("Players")
+      .from("players")
       .update({
         DUPR: update.originalDupr,
         PWRank: update.originalPWRank
@@ -2317,7 +2317,7 @@ async function persistPlayersOrder() {
   try {
     for (const update of updates) {
       const { error } = await window.supabaseClient
-        .from("Players")
+        .from("players")
         .update({ order_index: update.order_index })
         .eq("id", update.id);
 
@@ -2440,7 +2440,7 @@ async function savePlayerPhone(playerId, playerName) {
 
   try {
     const { error } = await window.supabaseClient
-      .from("Players")
+      .from("players")
       .update({ phone: phoneValue })
       .eq("id", playerId);
 
@@ -2488,6 +2488,25 @@ function getPowerRankingForPlayer(name) {
     p.name.toLowerCase() === String(name).toLowerCase()
   );
   return Number(player?.PWRank || 0);
+}
+
+function getPlayerRatingsFromCache(name) {
+  if (!name || !Array.isArray(playersCache)) {
+    return { dupr: null, pwRank: null };
+  }
+
+  const player = playersCache.find(p =>
+    String(p.name || "").toLowerCase() === String(name).toLowerCase()
+  );
+
+  if (!player) {
+    return { dupr: null, pwRank: null };
+  }
+
+  return {
+    dupr: Number.isFinite(Number(player.DUPR)) ? Number(player.DUPR) : null,
+    pwRank: Number.isFinite(Number(player.PWRank)) ? Number(player.PWRank) : null
+  };
 }
 
 function showSuccess(id) {
@@ -2570,38 +2589,11 @@ async function loadRankings(options = {}) {
       await loadPlayers();
     }
 
-    let duprValue = null;
-    let pwRankValue = null;
-    if (window.supabaseClient) {
-      try {
-        const { data: playerData, error } = await window.supabaseClient
-          .from('Players')
-          .select('DUPR, PWRank')
-          .ilike('name', selectedPlayer)
-          .single();
-
-        if (!error && playerData) {
-          duprValue = Number(playerData.DUPR) || null;
-          pwRankValue = Number(playerData.PWRank) || null;
-        }
-      } catch (err) {
-        console.error("❌ Failed to fetch DUPR from Supabase:", err);
-      }
-    }
-
-    if (duprValue === null || pwRankValue === null) {
-      const cachedPlayer = playersCache.find(p => p.name.toLowerCase() === selectedPlayer);
-      if (duprValue === null && cachedPlayer) {
-        duprValue = Number(cachedPlayer.DUPR) || 0;
-      }
-      if (pwRankValue === null && cachedPlayer) {
-        pwRankValue = Number(cachedPlayer.PWRank) || 0;
-      }
-    }
+    const { dupr: duprValue, pwRank: pwRankValue } = getPlayerRatingsFromCache(selectedPlayer);
 
     if (duprValue !== null) {
       bigStatEl.innerText = duprValue.toFixed(3);
-      console.log("✅ Displaying DUPR from Supabase:", duprValue);
+      console.log("✅ Displaying DUPR from players cache:", duprValue);
     } else {
       bigStatEl.innerText = "--";
     }
@@ -3917,6 +3909,25 @@ function handleAnalyticsStatClick(kind) {
     return;
   }
 
+  if (kind === "duprRating") {
+    const rows = buildRankedStatRows(
+      (playersCache || []).map(player => ({
+        name: String(player.name || "").toLowerCase(),
+        value: Number(player.DUPR || 0)
+      })),
+      pk,
+      value => Number(value || 0).toFixed(3)
+    );
+    showAnalyticsModal(
+      "DUPR Alternative",
+      ["Rank", "Name", "DUPR Alternative"],
+      rows,
+      pk,
+      { noHighlight: false }
+    );
+    return;
+  }
+
   if (!stats || !stats[pk]) return;
 
   if (kind === "bestPartner") openBestPartner(pk, stats);
@@ -4554,9 +4565,12 @@ async function renderDashboardAnalytics(player) {
   const gamesPlayed = Number(
     playerStats.gamesPlayed ?? playerStats.games ?? countGamesPlayedInSets(allSets, pl)
   ) || 0;
-  const playerRating = Number(
-    playersCache.find(entry => entry.name.toLowerCase() === pl)?.PWRank || 0
-  );
+  if (!playersCache.length) {
+    await loadPlayers();
+  }
+  const ratingData = getPlayerRatingsFromCache(pl);
+  const playerPowerRating = Number(ratingData.pwRank || 0);
+  const playerDupr = Number(ratingData.dupr || 0);
 
   const dropdownSorted = sortPlayersForDropdown(trend);
   lastModalBuildStats = buildPlayerStats(allSets);
@@ -4625,8 +4639,13 @@ async function renderDashboardAnalytics(player) {
         </div>
 
         <div class="stat bite-strength-stat" role="button" tabindex="0" onclick="handleAnalyticsStatClick('biteStrength')">
-          <div class="stat-title">Rating</div>
-          <div class="stat-value">${playerRating.toFixed(2)}</div>
+          <div class="stat-title">Power Rating</div>
+          <div class="stat-value">${playerPowerRating.toFixed(2)}</div>
+        </div>
+
+        <div class="stat dupr-alt-stat" role="button" tabindex="0" onclick="handleAnalyticsStatClick('duprRating')">
+          <div class="stat-title">DUPR Alternative</div>
+          <div class="stat-value">${playerDupr.toFixed(3)}</div>
         </div>
 
       </div>
