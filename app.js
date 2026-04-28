@@ -712,6 +712,13 @@ function sortPlayersForDropdown(data) {
   });
 }
 
+function normalizePlayerLookupName(name) {
+  return String(name || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
 async function loadPlayers() {
   playersCache = await callAPI({ action: "getPlayers" });
   
@@ -729,7 +736,8 @@ async function loadPlayers() {
         // Merge Supabase data into playersCache
         const supabaseMap = {};
         supabasePlayerData.forEach(p => {
-          supabaseMap[String(p.name).toLowerCase()] = {
+          const normalizedName = normalizePlayerLookupName(p.name);
+          supabaseMap[normalizedName] = {
             id: p.id,
             DUPR: p.DUPR,
             PWRank: p.PWRank,
@@ -739,15 +747,39 @@ async function loadPlayers() {
         });
 
         playersCache.forEach(p => {
-          const supabaseData = supabaseMap[String(p.name).toLowerCase()];
+          const normalizedName = normalizePlayerLookupName(p.name);
+          const supabaseData = supabaseMap[normalizedName];
           if (supabaseData) {
             p.id = supabaseData.id;
             p.DUPR = supabaseData.DUPR;
             p.PWRank = supabaseData.PWRank;
             p.phone = supabaseData.phone ?? "";
             p.order_index = supabaseData.order_index;
+          } else {
+            console.warn("⚠️ Missing Supabase player match during loadPlayers:", {
+              playerName: p.name,
+              normalizedName
+            });
           }
         });
+
+        const missingSupabaseIds = playersCache
+          .filter(player => !player?.id)
+          .map(player => player?.name);
+
+        if (missingSupabaseIds.length) {
+          console.warn("⚠️ Players missing Supabase ids after loadPlayers:", missingSupabaseIds);
+        }
+
+        console.log(
+          "✅ loadPlayers merged Supabase ratings:",
+          playersCache.map(player => ({
+            name: player.name,
+            id: player.id ?? null,
+            DUPR: player.DUPR ?? null,
+            PWRank: player.PWRank ?? null
+          }))
+        );
       }
     } catch (err) {
       console.error("⚠️ Error augmenting players with Supabase data:", err);
@@ -1126,13 +1158,16 @@ async function calculateSetRatings(setData, playersList) {
   
   // Get current power rankings for each player
 const getPlayerPWRank = (name) => {
-  const player = playersList.find(p => p.name.toLowerCase() === name);
-  return player?.PWRank ?? null; // 🚨 no fake 50
+  const player = playersList.find(p => normalizePlayerLookupName(p.name) === normalizePlayerLookupName(name));
+  if (!player) {
+    console.warn("⚠️ Missing player lookup:", name);
+  }
+  return Number(player?.PWRank ?? 50);
 };
 
 // Build arrays of valid ratings ONLY
-const teamAPowers = teamA.map(getPlayerPWRank).filter(v => v !== null);
-const teamBPowers = teamB.map(getPlayerPWRank).filter(v => v !== null);
+const teamAPowers = teamA.map(getPlayerPWRank);
+const teamBPowers = teamB.map(getPlayerPWRank);
 
 // Compute averages ONLY from real values
 const teamAAvg = teamAPowers.length
@@ -1143,10 +1178,24 @@ const teamBAvg = teamBPowers.length
   ? teamBPowers.reduce((a, b) => a + b, 0) / teamBPowers.length
   : null;
   const validScores = (setData.scores || []).filter(score => score && score.includes("-"));
-  if (!validScores.length || !teamA.length || !teamB.length) return [];
+  if (!validScores.length || !teamA.length || !teamB.length) {
+    console.warn("⚠️ Rating calc skipped due to invalid score/team data:", {
+      teamA,
+      teamB,
+      teamAPowers,
+      teamBPowers,
+      validScores
+    });
+    return [];
+  }
 
   if (teamAAvg === null || teamBAvg === null) {
-  console.warn("Missing PWRank data, skipping rating calc for this set");
+  console.warn("⚠️ Missing PWRank data, skipping rating calc for this set", {
+    teamA,
+    teamB,
+    teamAPowers,
+    teamBPowers
+  });
   return [];
 }
 
@@ -1182,7 +1231,9 @@ const teamBAvg = teamBPowers.length
   const baseDeltaB = -baseDeltaA;
 
   const buildDelta = (playerName, deltaBValue, opponentAvg) => {
-    const playerRecord = playersList.find(p => p.name.toLowerCase() === playerName);
+    const playerRecord = playersList.find(
+      p => normalizePlayerLookupName(p.name) === normalizePlayerLookupName(playerName)
+    );
     const deltaB = Number(deltaBValue.toFixed(3));
     const deltaA = Number((deltaB * 1.4).toFixed(3));
 
@@ -1201,6 +1252,14 @@ const teamBAvg = teamBPowers.length
 
   teamB.forEach(playerName => {
     ratingChanges.push(buildDelta(playerName, baseDeltaB, teamAAvg));
+  });
+
+  console.log("📊 calculateSetRatings result:", {
+    teamA,
+    teamB,
+    teamAPowers,
+    teamBPowers,
+    ratingChanges
   });
 
   return ratingChanges;
@@ -1279,48 +1338,29 @@ async function applyPlayerRatingBatch(playerUpdates) {
     return { ok: true };
   }
 
-  const canBatchById = playerUpdates.every(update => update.id);
-
-  if (canBatchById) {
-    const payload = playerUpdates.map(update => ({
-      id: update.id,
-      DUPR: update.nextDupr,
-      PWRank: update.nextPWRank
-    }));
-
-    const { error } = await window.supabaseClient
-      .from("players")
-      .upsert(payload, { onConflict: "id" });
-
-    if (error) {
-      return { ok: false, error };
-    }
-
-    return { ok: true };
+  const missingIds = playerUpdates.filter(update => !update.id);
+  if (missingIds.length) {
+    return {
+      ok: false,
+      error: {
+        message: "Missing Supabase player id for rating update",
+        players: missingIds.map(update => update.name)
+      }
+    };
   }
 
-  const applied = [];
-  for (const update of playerUpdates) {
-    const updateQuery = window.supabaseClient
-      .from("players")
-      .update({
-        DUPR: update.nextDupr,
-        PWRank: update.nextPWRank
-      });
+  const payload = playerUpdates.map(update => ({
+    id: update.id,
+    DUPR: update.nextDupr,
+    PWRank: update.nextPWRank
+  }));
 
-    const { error } = update.id
-      ? await updateQuery.eq("id", update.id)
-      : await updateQuery.ilike("name", update.name);
+  const { error } = await window.supabaseClient
+    .from("players")
+    .upsert(payload, { onConflict: "id" });
 
-    if (error) {
-      return {
-        ok: false,
-        error,
-        applied
-      };
-    }
-
-    applied.push(update);
+  if (error) {
+    return { ok: false, error };
   }
 
   return { ok: true };
@@ -1331,41 +1371,29 @@ async function rollbackPlayerRatingBatch(playerUpdates) {
     return { ok: true };
   }
 
-  const canBatchById = playerUpdates.every(update => update.id);
-
-  if (canBatchById) {
-    const payload = playerUpdates.map(update => ({
-      id: update.id,
-      DUPR: update.originalDupr,
-      PWRank: update.originalPWRank
-    }));
-
-    const { error } = await window.supabaseClient
-      .from("players")
-      .upsert(payload, { onConflict: "id" });
-
-    if (error) {
-      return { ok: false, error };
-    }
-
-    return { ok: true };
+  const missingIds = playerUpdates.filter(update => !update.id);
+  if (missingIds.length) {
+    return {
+      ok: false,
+      error: {
+        message: "Missing Supabase player id for rating rollback",
+        players: missingIds.map(update => update.name)
+      }
+    };
   }
 
-  for (const update of playerUpdates) {
-    const updateQuery = window.supabaseClient
-      .from("players")
-      .update({
-        DUPR: update.originalDupr,
-        PWRank: update.originalPWRank
-      });
+  const payload = playerUpdates.map(update => ({
+    id: update.id,
+    DUPR: update.originalDupr,
+    PWRank: update.originalPWRank
+  }));
 
-    const { error } = update.id
-      ? await updateQuery.eq("id", update.id)
-      : await updateQuery.ilike("name", update.name);
+  const { error } = await window.supabaseClient
+    .from("players")
+    .upsert(payload, { onConflict: "id" });
 
-    if (error) {
-      return { ok: false, error };
-    }
+  if (error) {
+    return { ok: false, error };
   }
 
   return { ok: true };
@@ -1393,9 +1421,21 @@ async function processSavedSetRatings(setNumber) {
     }
 
     if (existingLog && existingLog.length > 0) {
-      console.log("⚠️ Ratings already processed for set", setNumber);
-      await loadPlayers();
-      return;
+      const { error: deleteLogError } = await window.supabaseClient
+        .from("match_rating_logs")
+        .delete()
+        .eq("event_id", eventId)
+        .eq("set_number", Number(setNumber));
+
+      if (deleteLogError) {
+        console.error("❌ Failed to clear existing match rating logs before recalculation:", deleteLogError);
+        return;
+      }
+
+      console.log("♻️ Cleared existing match rating logs before recalculation:", {
+        eventId,
+        setNumber: Number(setNumber)
+      });
     }
 
     const setData = await getSavedSetData(setNumber);
@@ -1406,14 +1446,18 @@ async function processSavedSetRatings(setNumber) {
 
     const ratingChanges = await calculateSetRatings(setData, playersCache);
     if (!ratingChanges.length) {
-      console.warn("⚠️ No rating changes calculated for set", setNumber);
+      console.warn("⚠️ No rating changes calculated for set", setNumber, {
+        teamA: setData.teamA,
+        teamB: setData.teamB,
+        scores: setData.scores
+      });
       return;
     }
 
     const playerUpdates = [];
     for (const change of ratingChanges) {
       const playerRecord = playersCache.find(player =>
-        String(player.name || "").toLowerCase() === String(change.player_name || "").toLowerCase()
+        normalizePlayerLookupName(player.name) === normalizePlayerLookupName(change.player_name)
       );
 
       if (!playerRecord) {
@@ -1469,7 +1513,7 @@ async function processSavedSetRatings(setNumber) {
 
     playerUpdates.forEach(update => {
       const playerRecord = playersCache.find(player =>
-        String(player.name || "").toLowerCase() === String(update.name || "").toLowerCase()
+        normalizePlayerLookupName(player.name) === normalizePlayerLookupName(update.name)
       );
       if (playerRecord) {
         playerRecord.DUPR = update.nextDupr;
@@ -2865,16 +2909,16 @@ async function getHistory() {
     const { data, error } = await window.supabaseClient
       .from('history')
       .select('*')
-      .order('Date', { ascending: false });
+      .order('date', { ascending: false });
     
     if (error) throw error;
     
     // Transform Supabase data to match expected format
     const formatted = (data || []).map(row => ({
-      date: row.Date,
-      name: row.Player,
-      winPct: parseFloat(row.WinPct) || 0,
-      pointsAvg: parseFloat(row.PointsAvg) || 0
+      date: row.date,
+      name: row.player_name,
+      winPct: parseFloat(row.win_pct) || 0,
+      pointsAvg: parseFloat(row.points_avg) || 0
     }));
     
     historyCache = formatted;
@@ -3106,17 +3150,23 @@ async function finishDay() {
     for (const player of final) {
       const trend = after.find(p => p.name.toLowerCase() === player.name.toLowerCase());
       if (trend) {
-        await window.supabaseClient
+        const { error } = await window.supabaseClient
           .from('history')
           .insert([
             {
-              Date: today,
-              Player: player.name,
-              WinPct: trend.winPct.toString(),
-              PointsAvg: trend.pointsAvg.toString(),
-              player_name: player.name
+              date: today,
+              player_name: player.name,
+              win_pct: trend.winPct.toString(),
+              points_avg: trend.pointsAvg.toString()
             }
           ]);
+
+        if (error) {
+          console.error("❌ Failed to save history row to Supabase:", {
+            player: player.name,
+            error
+          });
+        }
       }
     }
     console.log("✅ History saved to Supabase");
