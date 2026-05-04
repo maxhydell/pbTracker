@@ -1189,6 +1189,8 @@ const teamBAvg = teamBPowers.length
     return [];
   }
 
+  const predicted = calculatePredictedScore(teamAAvg, teamBAvg);
+
   if (teamAAvg === null || teamBAvg === null) {
   console.warn("⚠️ Missing PWRank data, skipping rating calc for this set", {
     teamA,
@@ -1217,34 +1219,67 @@ const teamBAvg = teamBPowers.length
     }
   });
 
+  const actualAvgA = totalTeamAPoints / validScores.length;
+  const actualAvgB = totalTeamBPoints / validScores.length;
+  const predictedDiff = predicted.teamA - predicted.teamB;
+  const actualDiff = actualAvgA - actualAvgB;
+
+  const predictionError = Math.abs(actualDiff - predictedDiff);
+  const performanceDelta = (actualDiff - predictedDiff) / 10;
+
   const teamAWon = totalTeamAWins === totalTeamBWins
     ? totalTeamAPoints > totalTeamBPoints
     : totalTeamAWins > totalTeamBWins;
   const totalPoints = Math.max(1, totalTeamAPoints + totalTeamBPoints);
   const pointShareA = totalTeamAPoints / totalPoints;
   const expectedShareA = 1 / (1 + Math.pow(10, (teamBAvg - teamAAvg) / 10));
-  const pointsInfluenceA = (pointShareA - 0.5) * 0.9;
+  const pointsInfluenceA = (pointShareA - 0.5) * 0.5;
   const winsMargin = Math.abs(totalTeamAWins - totalTeamBWins) / Math.max(1, validScores.length);
   const pointMargin = Math.abs(totalTeamAPoints - totalTeamBPoints) / totalPoints;
   const closeMatchScale = 0.55 + (winsMargin * 0.55) + (pointMargin * 0.45);
-  const baseDeltaA = ((teamAWon ? 1 : 0) - expectedShareA + pointsInfluenceA) * (1.6 * closeMatchScale);
-  const baseDeltaB = -baseDeltaA;
+  // Scale factor: higher error = bigger rating swing
+const errorScale = 1 + Math.min(1, predictionError / 6);
 
-  const buildDelta = (playerName, deltaBValue, opponentAvg) => {
-    const playerRecord = playersList.find(
-      p => normalizePlayerLookupName(p.name) === normalizePlayerLookupName(playerName)
-    );
-    const deltaB = Number(deltaBValue.toFixed(3));
-    const deltaA = Number((deltaB * 1.4).toFixed(3));
+// Final delta with prediction weighting
+const K = 0.58;
 
-    return {
-      player_name: playerRecord?.name || playerName,
-      delta_A: deltaA,
-      delta_B: deltaB,
-      opponent_avg: Number(opponentAvg.toFixed(3)),
-      set_data: setData
-    };
+let winBonus = 0;
+
+// Only apply if team WON and underperformed vs prediction
+if (teamAWon && actualDiff < predictedDiff) {
+  winBonus = 0.04;
+}
+
+const baseDeltaA =
+  K *
+  (performanceDelta + winBonus)
+  * (1.6 * closeMatchScale)
+  * errorScale;
+const baseDeltaB = -baseDeltaA;
+
+
+const buildDelta = (playerName, deltaBValue, opponentAvg) => {
+  const playerRecord = playersList.find(
+    p => normalizePlayerLookupName(p.name) === normalizePlayerLookupName(playerName)
+  );
+
+  const gamesPlayed = Number(playerRecord?.games || 0);
+  const experienceMult = getExperienceMultiplier(gamesPlayed);
+
+  // Apply experience scaling FIRST
+  const scaledDeltaB = deltaBValue * experienceMult;
+
+  const deltaB = Number(scaledDeltaB.toFixed(3));
+  const deltaA = Number((deltaB * 0.04).toFixed(3)); // 🔥 NEW (was 1.4)
+
+  return {
+    player_name: playerRecord?.name || playerName,
+    delta_A: deltaA,
+    delta_B: deltaB,
+    opponent_avg: Number(opponentAvg.toFixed(3)),
+    set_data: setData
   };
+};
 
   teamA.forEach(playerName => {
     ratingChanges.push(buildDelta(playerName, baseDeltaA, teamBAvg));
@@ -1351,6 +1386,7 @@ async function applyPlayerRatingBatch(playerUpdates) {
 
   const payload = playerUpdates.map(update => ({
     id: update.id,
+    name: update.name, // ✅ ADD THIS
     DUPR: update.nextDupr,
     PWRank: update.nextPWRank
   }));
@@ -1365,6 +1401,17 @@ async function applyPlayerRatingBatch(playerUpdates) {
 
   return { ok: true };
 }
+
+function getExperienceMultiplier(gamesPlayed) {
+  const MIN_MULT = 0.3;   // very experienced players
+  const MAX_MULT = 1.2;   // brand new players
+  const DECAY_RATE = 0.05;
+
+  const mult = MAX_MULT * Math.exp(-DECAY_RATE * gamesPlayed);
+
+  return Math.max(MIN_MULT, mult);
+}
+
 
 async function rollbackPlayerRatingBatch(playerUpdates) {
   if (!window.supabaseClient || !Array.isArray(playerUpdates) || !playerUpdates.length) {
