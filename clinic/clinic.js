@@ -12,7 +12,6 @@
   let isFull = true;
   let descriptions = [];
   let currentRoute = "";
-  let phonePendingVerification = "";
   let authSubscription;
   const supabaseClient = window.supabase?.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
@@ -81,7 +80,7 @@
   }
 
   function renderUnauthorized(user) {
-    const account = user?.email || user?.phone || "your account";
+    const account = user?.email || "your account";
     document.title = "Permission required | PBTRKR Clinics";
     app.innerHTML = `
       <section class="auth-card auth-card-compact" aria-labelledby="auth-title">
@@ -111,31 +110,14 @@
         <div class="auth-account-state" id="auth-account-state" aria-live="polite"></div>
         <div class="auth-methods" id="auth-methods">
           <button class="auth-button auth-provider-button" id="google-sign-in" type="button"><span class="provider-icon google-icon" aria-hidden="true">G</span>Continue with Google</button>
-          <button class="auth-button auth-provider-button" id="apple-sign-in" type="button"><svg class="provider-icon apple-icon" viewBox="0 0 20 24" aria-hidden="true"><path fill="currentColor" d="M16.8 12.8c0-2.3 1.9-3.4 2-3.5-1.1-1.6-2.8-1.8-3.4-1.8-1.4-.2-2.9.9-3.7.9-.8 0-2-.9-3.1-.9-2 0-3.8 1.2-4.8 3.1-2 3.6-.5 8.9 1.4 11.8.9 1.4 2 3 3.5 2.9 1.4-.1 1.9-.9 3.6-.9s2.1.9 3.6.9c1.5 0 2.4-1.4 3.4-2.9.7-1.1 1.2-2.2 1.5-3.3-3.5-1.4-3.5-5.4-3.5-5.7M14.4 5.7c.8-.9 1.3-2.2 1.2-3.5-1.2.1-2.6.8-3.5 1.7-.8.9-1.4 2.1-1.3 3.4 1.3.1 2.7-.6 3.6-1.6Z"/></svg>Continue with Apple</button>
           <div class="auth-divider"><span>OR CONTINUE WITH</span></div>
           <button class="auth-button auth-method-button" id="show-email" type="button"><span class="method-icon" aria-hidden="true">✉</span><span><strong>Email</strong><small>Get a sign-in link in your inbox</small></span><span class="method-arrow" aria-hidden="true">→</span></button>
-          <button class="auth-button auth-method-button" id="show-phone" type="button"><span class="method-icon" aria-hidden="true">⌕</span><span><strong>Phone</strong><small>Get a one-time code by text</small></span><span class="method-arrow" aria-hidden="true">→</span></button>
         </div>
         <form class="auth-form is-hidden" id="email-form" novalidate>
           <label for="auth-email">Email address</label>
           <input class="auth-input" id="auth-email" name="email" type="email" autocomplete="email" required placeholder="you@example.com">
           <button class="auth-button auth-button-primary" id="send-magic-link" type="submit">Send Magic Link <span aria-hidden="true">→</span></button>
           <button class="auth-back-button" type="button" data-back-to-methods>← All sign-in methods</button>
-        </form>
-        <form class="auth-form is-hidden" id="phone-form" novalidate>
-          <label for="auth-phone">Phone number</label>
-          <input class="auth-input" id="auth-phone" name="phone" type="tel" autocomplete="tel" inputmode="tel" required placeholder="+1 555 123 4567">
-          <p class="auth-form-hint">Enter your number with its country code. We’ll text you a one-time code.</p>
-          <button class="auth-button auth-button-primary" id="send-phone-code" type="submit">Send SMS Code <span aria-hidden="true">→</span></button>
-          <button class="auth-button auth-button-primary is-hidden" id="verify-phone-code" type="button">Verify Code <span aria-hidden="true">→</span></button>
-          <button class="auth-back-button" type="button" data-back-to-methods>← All sign-in methods</button>
-        </form>
-        <form class="auth-form is-hidden" id="phone-verify-form" novalidate>
-          <label for="auth-phone-code">Verification code</label>
-          <input class="auth-input" id="auth-phone-code" name="token" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" required placeholder="6-digit code">
-          <p class="auth-form-hint" id="phone-sent-message"></p>
-          <button class="auth-button auth-button-primary" id="confirm-phone-code" type="submit">Verify &amp; Continue <span aria-hidden="true">→</span></button>
-          <button class="auth-back-button" type="button" id="change-phone">Use a different number</button>
         </form>
         <section class="auth-confirmation is-hidden" id="email-confirmation" aria-live="polite">
           <div class="auth-state-icon" aria-hidden="true">✉</div>
@@ -149,21 +131,14 @@
       </section>`;
 
     document.getElementById("google-sign-in").addEventListener("click", () => signInWithOAuth("google"));
-    document.getElementById("apple-sign-in").addEventListener("click", () => signInWithOAuth("apple"));
     document.getElementById("show-email").addEventListener("click", showEmailForm);
-    document.getElementById("show-phone").addEventListener("click", showPhoneForm);
     document.getElementById("email-form").addEventListener("submit", sendMagicLink);
-    document.getElementById("phone-form").addEventListener("submit", sendPhoneCode);
-    document.getElementById("phone-verify-form").addEventListener("submit", verifyPhoneCode);
-    document.getElementById("change-phone").addEventListener("click", showPhoneForm);
     document.querySelectorAll("[data-back-to-methods]").forEach((button) => button.addEventListener("click", showAuthMethods));
   }
 
   function showAuthMethods() {
     document.getElementById("auth-methods")?.classList.remove("is-hidden");
     document.getElementById("email-form")?.classList.add("is-hidden");
-    document.getElementById("phone-form")?.classList.add("is-hidden");
-    document.getElementById("phone-verify-form")?.classList.add("is-hidden");
     document.getElementById("email-confirmation")?.classList.add("is-hidden");
     setAuthFeedback("");
   }
@@ -172,17 +147,6 @@
     document.getElementById("auth-methods").classList.add("is-hidden");
     document.getElementById("email-form").classList.remove("is-hidden");
     document.getElementById("auth-email").focus();
-    setAuthFeedback("");
-  }
-
-  function showPhoneForm() {
-    document.getElementById("auth-methods").classList.add("is-hidden");
-    document.getElementById("email-form").classList.add("is-hidden");
-    document.getElementById("phone-verify-form").classList.add("is-hidden");
-    document.getElementById("phone-form").classList.remove("is-hidden");
-    document.getElementById("send-phone-code").classList.remove("is-hidden");
-    document.getElementById("verify-phone-code").classList.add("is-hidden");
-    document.getElementById("auth-phone").focus();
     setAuthFeedback("");
   }
 
@@ -264,64 +228,6 @@
     return redirectUrl.href;
   }
 
-  function normalizePhone(phone) {
-    return phone.trim().replace(/[\s().-]/g, "");
-  }
-
-  async function sendPhoneCode(event) {
-    event.preventDefault();
-    const form = event.currentTarget;
-    if (!form.reportValidity()) return;
-    const phone = normalizePhone(form.elements.phone.value);
-    if (!/^\+[1-9]\d{7,14}$/.test(phone)) {
-      setAuthFeedback("Enter a valid phone number with country code, such as +1 555 123 4567.");
-      return;
-    }
-    const button = document.getElementById("send-phone-code");
-    setAuthBusy(button, true, "Sending code…");
-    setAuthFeedback("");
-    try {
-      const { error } = await supabaseClient.auth.signInWithOtp({ phone });
-      if (error) throw error;
-      phonePendingVerification = phone;
-      document.getElementById("phone-sent-message").textContent = `We sent a one-time code to ${phone}.`;
-      document.getElementById("phone-form").classList.add("is-hidden");
-      document.getElementById("phone-verify-form").classList.remove("is-hidden");
-      document.getElementById("auth-phone-code").focus();
-    } catch (error) {
-      console.error("Phone verification code could not be sent:", error);
-      setAuthFeedback(error.message || "Could not send the SMS code. Please try again.");
-    } finally {
-      setAuthBusy(button, false);
-    }
-  }
-
-  async function verifyPhoneCode(event) {
-    event.preventDefault();
-    const form = event.currentTarget;
-    if (!form.reportValidity()) return;
-    const token = form.elements.token.value.trim();
-    if (!/^\d{6}$/.test(token)) {
-      setAuthFeedback("Enter the six-digit code from your text message.");
-      return;
-    }
-    const button = document.getElementById("confirm-phone-code");
-    setAuthBusy(button, true, "Verifying…");
-    setAuthFeedback("");
-    try {
-      const { error } = await supabaseClient.auth.verifyOtp({
-        phone: phonePendingVerification,
-        token,
-        type: "sms"
-      });
-      if (error) throw error;
-    } catch (error) {
-      console.error("Phone verification failed:", error);
-      setAuthFeedback(error.message || "That code could not be verified. Please try again.");
-      setAuthBusy(button, false);
-    }
-  }
-
   async function signOut() {
     if (!supabaseClient) return;
     try {
@@ -379,10 +285,8 @@
 
     methods.classList.add("is-hidden");
     document.getElementById("email-form")?.classList.add("is-hidden");
-    document.getElementById("phone-form")?.classList.add("is-hidden");
-    document.getElementById("phone-verify-form")?.classList.add("is-hidden");
     document.getElementById("email-confirmation")?.classList.add("is-hidden");
-    const identity = user.email || user.phone || "Your account";
+    const identity = user.email || "Your account";
     if (accountState) {
       accountState.innerHTML = `
         <span class="auth-state-icon" aria-hidden="true">✓</span>

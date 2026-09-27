@@ -107,7 +107,6 @@ input[type="date"], input[type="time"] { color-scheme: dark; }
 .auth-provider-button:hover:not(:disabled) { border-color: rgba(184,243,74,.32); background: rgba(255,255,255,.045); }
 .provider-icon { width: 19px; font-family: Arial, sans-serif; font-size: 17px; font-weight: 700; text-align: center; }
 .google-icon { color: #fff; text-shadow: 1px 1px #4285f4, -1px 1px #34a853, 1px -1px #fbbc05, -1px -1px #ea4335; }
-.apple-icon { color: #fff; font-size: 19px; }
 .auth-divider { display: flex; align-items: center; gap: 12px; margin: 11px 0 4px; color: #7e897e; font-size: 8px; font-weight: 800; letter-spacing: .14em; }
 .auth-divider::before, .auth-divider::after { flex: 1; border-top: 1px solid var(--line); content: ""; }
 .auth-method-button { justify-content: start; min-height: 57px; border-color: rgba(235,242,231,.1); background: rgba(255,255,255,.018); color: var(--text); text-align: left; }
