@@ -14,13 +14,11 @@
     "Allie Perkner",
     "Amal Rangachari",
     "Amy Wessels",
-    "Amy Mechlowitz",
     "Andrea Vander Kooi",
     "Angel Matias Lopez",
     "Christian Rambler",
     "Christine (Tina) Ford",
     "Chuck Smith",
-    "Claire Dickson",
     "Cleigh Carson",
     "Cleigh Carson",
     "Cole Rambler",
@@ -691,7 +689,10 @@
     app.innerHTML = `
       <article class="clinic-card">
         <header class="event-hero clinic-header">
-          <span class="eyebrow"><span class="eyebrow-dot"></span> PICKLEBALL CLINIC</span>
+          <div class="event-hero-topline">
+            <span class="eyebrow"><span class="eyebrow-dot"></span> PICKLEBALL CLINIC</span>
+            <span class="pro-eyebrow"><strong>MAX HYDELL</strong><span>PICKLEBALL PRO</span></span>
+          </div>
           <h1 class="clinic-title">${escapeHtml(event.event_name || "Pickleball Clinic")}</h1>
           ${badge}
           <div class="event-meta">
@@ -710,6 +711,9 @@
           </div>
           ${participantsMarkup}
         </section>
+        <div class="registration-closed-wrap">
+          <button class="registration-closed-button" type="button" disabled aria-disabled="true">🔒 Registration Closed</button>
+        </div>
       </article>`;
   }
 
