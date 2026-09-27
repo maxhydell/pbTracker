@@ -1,7 +1,7 @@
 -- PBTRKR Clinics event storage.
 -- Run this in the Supabase SQL editor for project qyhzxfserrvsgutfhyel.
 -- Public visitors can read published events. Only users whose trusted
--- app_metadata.role is "clinic_admin" can view drafts or create/update events.
+-- app_metadata.role is "clinic_admin" can view drafts or create/update/delete events.
 
 create table if not exists public.clinic_events (
   id uuid primary key default gen_random_uuid(),
@@ -76,8 +76,16 @@ create policy "Clinic admins can update clinic events"
   using ((select auth.jwt() -> 'app_metadata' ->> 'role') = 'clinic_admin')
   with check ((select auth.jwt() -> 'app_metadata' ->> 'role') = 'clinic_admin');
 
+drop policy if exists "Clinic admins can delete clinic events" on public.clinic_events;
+create policy "Clinic admins can delete clinic events"
+  on public.clinic_events
+  for delete
+  to authenticated
+  using ((select auth.jwt() -> 'app_metadata' ->> 'role') = 'clinic_admin');
+
 grant select on public.clinic_events to anon, authenticated;
 grant insert, update on public.clinic_events to authenticated;
+grant delete on public.clinic_events to authenticated;
 
 comment on table public.clinic_events is
   'Standalone PBTRKR Clinics event records. Set app_metadata.role=clinic_admin through a trusted Supabase admin path to allow event management.';
