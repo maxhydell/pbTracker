@@ -134,6 +134,11 @@
 
     const today = new Date();
     const todayString = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+    const filters = {
+      status: "published",
+      event_date_gte: todayString,
+      order: ["event_date.asc", "start_time.asc"]
+    };
 
     try {
       const { data, error } = await supabaseClient
@@ -150,13 +155,24 @@
       eventCount.textContent = String(events.length);
 
       if (!events.length) {
+        console.info("[PBTRKR Clinics] No upcoming published events matched the dashboard filters.", filters);
+      }
+
+      if (!events.length) {
         eventList.innerHTML = '<div class="state-card state-card-empty"><div><strong>No upcoming clinics just yet.</strong>Check back soon for the next chance to level up your game.</div></div>';
         return;
       }
 
       eventList.innerHTML = events.map(renderEvent).join("");
     } catch (error) {
-      console.error("Could not load published clinic events:", error);
+      console.error("[PBTRKR Clinics] Upcoming event query failed.", {
+        filters,
+        message: error?.message,
+        code: error?.code,
+        details: error?.details,
+        hint: error?.hint,
+        error
+      });
       eventCount.textContent = "0";
       showMessage("We could not load events right now. Please refresh to try again.", true);
     }
