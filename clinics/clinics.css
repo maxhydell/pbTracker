@@ -22,6 +22,7 @@ a { color: inherit; text-decoration: none; }
 button, input, textarea { font: inherit; }
 .site-shell { width: min(1120px, calc(100% - 64px)); margin: 0 auto; }
 .site-header { min-height: 82px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); }
+.header-actions { display: flex; align-items: center; gap: 9px; }
 .brand { display: inline-flex; align-items: center; gap: 12px; }
 .brand img { width: 35px; height: 35px; object-fit: contain; }
 .brand-name, h1, h2, h3 { font-family: "Outfit", sans-serif; }
@@ -32,6 +33,8 @@ button, input, textarea { font: inherit; }
 .button:hover { transform: translateY(-1px); }
 .button-primary { background: var(--green); color: #18200f; }
 .button-primary:hover { background: #c9ff69; }
+.button-secondary { border-color: var(--line); background: rgba(255,255,255,.025); color: #e0e6dc; }
+.button-secondary:hover { background: rgba(255,255,255,.07); }
 .hero { min-height: 300px; position: relative; display: flex; align-items: center; justify-content: space-between; overflow: hidden; margin: 38px 0 74px; padding: 46px 58px; border: 1px solid rgba(184,243,74,.2); border-radius: 18px; background: linear-gradient(112deg, rgba(34,43,34,.96), rgba(22,29,24,.93) 58%, rgba(41,51,29,.78)); box-shadow: 0 20px 70px rgba(0,0,0,.15); }
 .hero::after { content: ""; position: absolute; inset: 0; pointer-events: none; background: linear-gradient(90deg, transparent 47%, rgba(184,243,74,.025)); }
 .hero-copy { position: relative; z-index: 1; max-width: 600px; }
@@ -87,6 +90,8 @@ h1 span { color: var(--green); }
   .brand-name { font-size: 16px; }
   .brand-section { font-size: 12px; }
   .site-header > .button { min-height: 38px; padding: 0 11px; font-size: 11px; }
+  .header-actions { gap: 6px; }
+  .header-actions .button { min-height: 37px; padding: 0 9px; font-size: 10px; }
   .hero { min-height: 284px; display: block; margin: 24px 0 50px; padding: 30px 24px; }
   h1 { font-size: clamp(36px, 10vw, 47px); }
   .hero-count { min-width: 0; width: fit-content; margin-top: 22px; padding: 10px 14px; }

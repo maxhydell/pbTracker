@@ -6,6 +6,8 @@
   const eventList = document.getElementById("event-list");
   const eventCount = document.getElementById("event-count");
   const toast = document.getElementById("toast");
+  const accountButton = document.getElementById("account-button");
+  const createEventButton = document.getElementById("create-event-button");
   let toastTimeout;
 
   const supabaseClient = window.supabase?.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
@@ -158,6 +160,54 @@
       eventCount.textContent = "0";
       showMessage("We could not load events right now. Please refresh to try again.", true);
     }
+  }
+
+  function updateAccountButton(session) {
+    if (!accountButton) return;
+    const user = session?.user;
+    accountButton.textContent = user?.email || user?.phone || (user ? "Account" : "Sign In");
+    accountButton.href = "/clinic/?p=auth";
+    accountButton.title = user ? "Manage your Clinics account" : "Sign in to Clinics";
+    accountButton.classList.toggle("button-secondary", true);
+  }
+
+  async function handleCreateEventClick(event) {
+    event.preventDefault();
+    if (!supabaseClient) {
+      window.location.assign("/clinic/?p=auth&next=create");
+      return;
+    }
+
+    createEventButton.setAttribute("aria-busy", "true");
+    try {
+      const { data, error } = await supabaseClient.auth.getSession();
+      if (error) throw error;
+      if (!data?.session) {
+        window.location.assign("/clinic/?p=auth&next=create");
+        return;
+      }
+      window.location.assign("/clinic/?p=create");
+    } catch (error) {
+      console.error("Could not check clinic account:", error);
+      window.location.assign("/clinic/?p=auth&next=create");
+    }
+  }
+
+  if (supabaseClient) {
+    accountButton.addEventListener("click", (event) => {
+      event.preventDefault();
+      window.location.assign("/clinic/?p=auth");
+    });
+    createEventButton.addEventListener("click", handleCreateEventClick);
+    supabaseClient.auth.getSession()
+      .then(({ data, error }) => {
+        if (error) throw error;
+        updateAccountButton(data?.session);
+      })
+      .catch((error) => console.error("Could not load clinic account:", error));
+    supabaseClient.auth.onAuthStateChange((_event, session) => updateAccountButton(session));
+  } else {
+    createEventButton.addEventListener("click", handleCreateEventClick);
   }
 
   eventList.addEventListener("click", (event) => {
