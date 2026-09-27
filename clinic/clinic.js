@@ -49,6 +49,7 @@
   let isFull = true;
   let descriptions = [];
   let currentRoute = "";
+  const trackedClinicEventIds = new Set();
   let authSubscription;
   const supabaseClient = window.supabase?.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
@@ -750,9 +751,63 @@
         return;
       }
       renderEvent(data);
+      if (!trackedClinicEventIds.has(data.id)) {
+        trackedClinicEventIds.add(data.id);
+        trackClinicEventVisit(data.id);
+      }
     } catch (error) {
       console.error("Could not load clinic event:", error);
       app.innerHTML = '<section class="state-panel">This event could not be loaded right now. Please try again later.</section>';
+    }
+  }
+
+  function getClinicDeviceId() {
+    const parameters = new URLSearchParams(window.location.search);
+    const preferredPlayer = (localStorage.getItem("pbTracker_playerPref_v1") || "").trim().toLowerCase();
+    const player = parameters.get("p")?.toLowerCase() || preferredPlayer || localStorage.getItem("player");
+    const storageKey = player ? `pbTracker_deviceId_v1_${player}` : "pbTracker_deviceId_v1";
+    let deviceId = localStorage.getItem(storageKey);
+    if (!deviceId) {
+      deviceId = crypto.randomUUID();
+      localStorage.setItem(storageKey, deviceId);
+    }
+    return deviceId;
+  }
+
+  async function trackClinicEventVisit(clinicEventId) {
+    if (!clinicEventId || !supabaseClient) return;
+    const visitor = {
+      device_id: getClinicDeviceId(),
+      ip: null,
+      city: null,
+      region: null,
+      org: null,
+      page: window.location.pathname || "unknown",
+      full_url: window.location.href,
+      query: window.location.search || null,
+      mode: new URLSearchParams(window.location.search).get("p") || null,
+      time: new Date().toISOString(),
+      userAgent: navigator.userAgent,
+      clinic_event_id: clinicEventId
+    };
+
+    try {
+      const response = await fetch("https://ipapi.co/json/");
+      if (!response.ok) throw new Error("Approximate IP location lookup failed.");
+      const context = await response.json();
+      visitor.ip = context.ip || null;
+      visitor.city = context.city || null;
+      visitor.region = context.region || null;
+      visitor.org = context.org || null;
+    } catch (error) {
+      console.warn("Could not load approximate clinic visitor location:", error);
+    }
+
+    try {
+      const { error } = await supabaseClient.from("visitors").insert([visitor]);
+      if (error) throw error;
+    } catch (error) {
+      console.warn("Could not record clinic event visit:", error?.message || error);
     }
   }
 
