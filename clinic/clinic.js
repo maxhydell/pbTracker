@@ -3,6 +3,7 @@
 
   const SUPABASE_URL = "https://qyhzxfserrvsgutfhyel.supabase.co";
   const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF5aHp4ZnNlcnJ2c2d1dGZoeWVsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY4MDQ4MDIsImV4cCI6MjA5MjM4MDgwMn0.5guDdk5wnohJw_czrfH4WxUZpZvi6l_0W9jGDmZ4jY4";
+  const AUTH_REDIRECT_URL = "https://pbtrkr.app/clinic/?p=auth";
   const PONTE_VEDRA_YMCA = "Ponte Vedra YMCA";
   const PONTE_VEDRA_ADDRESS = "170 Landrum Ln, 32082, FL";
   const app = document.getElementById("app");
@@ -10,6 +11,9 @@
   let toastTimeout;
   let isFull = true;
   let descriptions = [];
+  let currentRoute = "";
+  let phonePendingVerification = "";
+  let authSubscription;
   const supabaseClient = window.supabase?.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
   function escapeHtml(value) {
@@ -76,18 +80,327 @@
     if (busyButton) busyButton.textContent = busyLabel;
   }
 
-  function renderAdminGate() {
+  function renderUnauthorized(user) {
+    const account = user?.email || user?.phone || "your account";
+    document.title = "Permission required | PBTRKR Clinics";
     app.innerHTML = `
-      <section class="clinic-card">
-        <header class="clinic-header">
-          <span class="eyebrow"><span class="eyebrow-dot"></span> PBTRKR CLINICS</span>
-          <h1 class="clinic-title">Create an event</h1>
-          <p class="clinic-subtitle">Sign in with an authorized clinic administrator account to manage events.</p>
-        </header>
-        <div class="clinic-body">
-          <div class="state-panel" role="status">Event creation is available to authorized administrators only.</div>
+      <section class="auth-card auth-card-compact" aria-labelledby="auth-title">
+        <a class="auth-brand" href="/clinics" aria-label="PBTRKR Clinics"><img src="/logo.png" alt=""><span>PBTRKR</span><i></i><span class="auth-brand-section">Clinics</span></a>
+        <div class="auth-state-icon" aria-hidden="true">!</div>
+        <h1 id="auth-title">Permission required</h1>
+        <p class="auth-description">You’re signed in, but you don’t have permission to create clinic events.</p>
+        <p class="auth-account">Signed in as ${escapeHtml(account)}</p>
+        <div class="auth-state-actions">
+          <a class="auth-button auth-button-primary" href="/clinics">Back to Clinics</a>
+          <button class="auth-button auth-button-secondary" id="unauthorized-sign-out" type="button">Sign Out</button>
         </div>
       </section>`;
+    document.getElementById("unauthorized-sign-out").addEventListener("click", signOut);
+  }
+
+  function renderAuthPage() {
+    document.title = "Sign in | PBTRKR Clinics";
+    app.innerHTML = `
+      <section class="auth-card" aria-labelledby="auth-title">
+        <a class="auth-brand" href="/clinics" aria-label="PBTRKR Clinics"><img src="/logo.png" alt=""><span>PBTRKR</span><i></i><span class="auth-brand-section">Clinics</span></a>
+        <div class="auth-heading">
+          <span class="eyebrow"><span class="eyebrow-dot"></span> YOUR NEXT POINT STARTS HERE</span>
+          <h1 id="auth-title">Welcome to the club.</h1>
+          <p class="auth-description">Sign in or create your account</p>
+        </div>
+        <div class="auth-account-state" id="auth-account-state" aria-live="polite"></div>
+        <div class="auth-methods" id="auth-methods">
+          <button class="auth-button auth-provider-button" id="google-sign-in" type="button"><span class="provider-icon google-icon" aria-hidden="true">G</span>Continue with Google</button>
+          <button class="auth-button auth-provider-button" id="apple-sign-in" type="button"><svg class="provider-icon apple-icon" viewBox="0 0 20 24" aria-hidden="true"><path fill="currentColor" d="M16.8 12.8c0-2.3 1.9-3.4 2-3.5-1.1-1.6-2.8-1.8-3.4-1.8-1.4-.2-2.9.9-3.7.9-.8 0-2-.9-3.1-.9-2 0-3.8 1.2-4.8 3.1-2 3.6-.5 8.9 1.4 11.8.9 1.4 2 3 3.5 2.9 1.4-.1 1.9-.9 3.6-.9s2.1.9 3.6.9c1.5 0 2.4-1.4 3.4-2.9.7-1.1 1.2-2.2 1.5-3.3-3.5-1.4-3.5-5.4-3.5-5.7M14.4 5.7c.8-.9 1.3-2.2 1.2-3.5-1.2.1-2.6.8-3.5 1.7-.8.9-1.4 2.1-1.3 3.4 1.3.1 2.7-.6 3.6-1.6Z"/></svg>Continue with Apple</button>
+          <div class="auth-divider"><span>OR CONTINUE WITH</span></div>
+          <button class="auth-button auth-method-button" id="show-email" type="button"><span class="method-icon" aria-hidden="true">✉</span><span><strong>Email</strong><small>Get a sign-in link in your inbox</small></span><span class="method-arrow" aria-hidden="true">→</span></button>
+          <button class="auth-button auth-method-button" id="show-phone" type="button"><span class="method-icon" aria-hidden="true">⌕</span><span><strong>Phone</strong><small>Get a one-time code by text</small></span><span class="method-arrow" aria-hidden="true">→</span></button>
+        </div>
+        <form class="auth-form is-hidden" id="email-form" novalidate>
+          <label for="auth-email">Email address</label>
+          <input class="auth-input" id="auth-email" name="email" type="email" autocomplete="email" required placeholder="you@example.com">
+          <button class="auth-button auth-button-primary" id="send-magic-link" type="submit">Send Magic Link <span aria-hidden="true">→</span></button>
+          <button class="auth-back-button" type="button" data-back-to-methods>← All sign-in methods</button>
+        </form>
+        <form class="auth-form is-hidden" id="phone-form" novalidate>
+          <label for="auth-phone">Phone number</label>
+          <input class="auth-input" id="auth-phone" name="phone" type="tel" autocomplete="tel" inputmode="tel" required placeholder="+1 555 123 4567">
+          <p class="auth-form-hint">Enter your number with its country code. We’ll text you a one-time code.</p>
+          <button class="auth-button auth-button-primary" id="send-phone-code" type="submit">Send SMS Code <span aria-hidden="true">→</span></button>
+          <button class="auth-button auth-button-primary is-hidden" id="verify-phone-code" type="button">Verify Code <span aria-hidden="true">→</span></button>
+          <button class="auth-back-button" type="button" data-back-to-methods>← All sign-in methods</button>
+        </form>
+        <form class="auth-form is-hidden" id="phone-verify-form" novalidate>
+          <label for="auth-phone-code">Verification code</label>
+          <input class="auth-input" id="auth-phone-code" name="token" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" required placeholder="6-digit code">
+          <p class="auth-form-hint" id="phone-sent-message"></p>
+          <button class="auth-button auth-button-primary" id="confirm-phone-code" type="submit">Verify &amp; Continue <span aria-hidden="true">→</span></button>
+          <button class="auth-back-button" type="button" id="change-phone">Use a different number</button>
+        </form>
+        <section class="auth-confirmation is-hidden" id="email-confirmation" aria-live="polite">
+          <div class="auth-state-icon" aria-hidden="true">✉</div>
+          <h2>Check your email</h2>
+          <p id="email-confirmation-copy"></p>
+          <p class="auth-form-hint">Use the link in the email to continue.</p>
+          <button class="auth-back-button" type="button" data-back-to-methods>← Back to sign-in methods</button>
+        </section>
+        <div class="auth-feedback" id="auth-feedback" role="alert" aria-live="polite"></div>
+        <p class="auth-legal">By continuing, you agree to use PBTRKR Clinics responsibly.</p>
+      </section>`;
+
+    document.getElementById("google-sign-in").addEventListener("click", () => signInWithOAuth("google"));
+    document.getElementById("apple-sign-in").addEventListener("click", () => signInWithOAuth("apple"));
+    document.getElementById("show-email").addEventListener("click", showEmailForm);
+    document.getElementById("show-phone").addEventListener("click", showPhoneForm);
+    document.getElementById("email-form").addEventListener("submit", sendMagicLink);
+    document.getElementById("phone-form").addEventListener("submit", sendPhoneCode);
+    document.getElementById("phone-verify-form").addEventListener("submit", verifyPhoneCode);
+    document.getElementById("change-phone").addEventListener("click", showPhoneForm);
+    document.querySelectorAll("[data-back-to-methods]").forEach((button) => button.addEventListener("click", showAuthMethods));
+  }
+
+  function showAuthMethods() {
+    document.getElementById("auth-methods")?.classList.remove("is-hidden");
+    document.getElementById("email-form")?.classList.add("is-hidden");
+    document.getElementById("phone-form")?.classList.add("is-hidden");
+    document.getElementById("phone-verify-form")?.classList.add("is-hidden");
+    document.getElementById("email-confirmation")?.classList.add("is-hidden");
+    setAuthFeedback("");
+  }
+
+  function showEmailForm() {
+    document.getElementById("auth-methods").classList.add("is-hidden");
+    document.getElementById("email-form").classList.remove("is-hidden");
+    document.getElementById("auth-email").focus();
+    setAuthFeedback("");
+  }
+
+  function showPhoneForm() {
+    document.getElementById("auth-methods").classList.add("is-hidden");
+    document.getElementById("email-form").classList.add("is-hidden");
+    document.getElementById("phone-verify-form").classList.add("is-hidden");
+    document.getElementById("phone-form").classList.remove("is-hidden");
+    document.getElementById("send-phone-code").classList.remove("is-hidden");
+    document.getElementById("verify-phone-code").classList.add("is-hidden");
+    document.getElementById("auth-phone").focus();
+    setAuthFeedback("");
+  }
+
+  function setAuthFeedback(message, isError = true) {
+    const feedback = document.getElementById("auth-feedback");
+    if (!feedback) return;
+    feedback.textContent = message;
+    feedback.classList.toggle("is-visible", Boolean(message));
+    feedback.classList.toggle("is-error", isError);
+  }
+
+  function setAuthBusy(button, busy, busyText) {
+    if (!button) return;
+    if (busy) {
+      button.dataset.originalHtml = button.innerHTML;
+      button.disabled = true;
+      button.setAttribute("aria-busy", "true");
+      button.textContent = busyText;
+    } else {
+      button.disabled = false;
+      button.removeAttribute("aria-busy");
+      if (button.dataset.originalHtml) button.innerHTML = button.dataset.originalHtml;
+    }
+  }
+
+  function showEmailConfirmation(email) {
+    document.getElementById("auth-methods").classList.add("is-hidden");
+    document.getElementById("email-form").classList.add("is-hidden");
+    document.getElementById("email-confirmation-copy").textContent = `Your sign-in link has been sent to ${email}.`;
+    document.getElementById("email-confirmation").classList.remove("is-hidden");
+    setAuthFeedback("", false);
+  }
+
+  async function signInWithOAuth(provider) {
+    const button = document.getElementById(`${provider}-sign-in`);
+    setAuthBusy(button, true, "Connecting…");
+    setAuthFeedback("");
+    try {
+      const { error } = await supabaseClient.auth.signInWithOAuth({
+        provider,
+        options: { redirectTo: getAuthRedirectUrl() }
+      });
+      if (error) throw error;
+    } catch (error) {
+      console.error(`${provider} authentication failed:`, error);
+      setAuthFeedback(error.message || `Could not start ${provider} sign-in. Please try again.`);
+      setAuthBusy(button, false);
+    }
+  }
+
+  async function sendMagicLink(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const email = form.elements.email.value.trim();
+    if (!form.reportValidity()) return;
+    const button = document.getElementById("send-magic-link");
+    setAuthBusy(button, true, "Sending link…");
+    setAuthFeedback("");
+    try {
+      const { error } = await supabaseClient.auth.signInWithOtp({
+        email,
+        options: { emailRedirectTo: getAuthRedirectUrl() }
+      });
+      if (error) throw error;
+      showEmailConfirmation(email);
+    } catch (error) {
+      console.error("Email magic link could not be sent:", error);
+      setAuthFeedback(error.message || "Could not send the sign-in link. Please try again.");
+    } finally {
+      setAuthBusy(button, false);
+    }
+  }
+
+  function getAuthRedirectUrl() {
+    const redirectUrl = new URL(AUTH_REDIRECT_URL);
+    if (new URLSearchParams(window.location.search).get("next") === "create") {
+      redirectUrl.searchParams.set("next", "create");
+    }
+    return redirectUrl.href;
+  }
+
+  function normalizePhone(phone) {
+    return phone.trim().replace(/[\s().-]/g, "");
+  }
+
+  async function sendPhoneCode(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    if (!form.reportValidity()) return;
+    const phone = normalizePhone(form.elements.phone.value);
+    if (!/^\+[1-9]\d{7,14}$/.test(phone)) {
+      setAuthFeedback("Enter a valid phone number with country code, such as +1 555 123 4567.");
+      return;
+    }
+    const button = document.getElementById("send-phone-code");
+    setAuthBusy(button, true, "Sending code…");
+    setAuthFeedback("");
+    try {
+      const { error } = await supabaseClient.auth.signInWithOtp({ phone });
+      if (error) throw error;
+      phonePendingVerification = phone;
+      document.getElementById("phone-sent-message").textContent = `We sent a one-time code to ${phone}.`;
+      document.getElementById("phone-form").classList.add("is-hidden");
+      document.getElementById("phone-verify-form").classList.remove("is-hidden");
+      document.getElementById("auth-phone-code").focus();
+    } catch (error) {
+      console.error("Phone verification code could not be sent:", error);
+      setAuthFeedback(error.message || "Could not send the SMS code. Please try again.");
+    } finally {
+      setAuthBusy(button, false);
+    }
+  }
+
+  async function verifyPhoneCode(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    if (!form.reportValidity()) return;
+    const token = form.elements.token.value.trim();
+    if (!/^\d{6}$/.test(token)) {
+      setAuthFeedback("Enter the six-digit code from your text message.");
+      return;
+    }
+    const button = document.getElementById("confirm-phone-code");
+    setAuthBusy(button, true, "Verifying…");
+    setAuthFeedback("");
+    try {
+      const { error } = await supabaseClient.auth.verifyOtp({
+        phone: phonePendingVerification,
+        token,
+        type: "sms"
+      });
+      if (error) throw error;
+    } catch (error) {
+      console.error("Phone verification failed:", error);
+      setAuthFeedback(error.message || "That code could not be verified. Please try again.");
+      setAuthBusy(button, false);
+    }
+  }
+
+  async function signOut() {
+    if (!supabaseClient) return;
+    try {
+      const { error } = await supabaseClient.auth.signOut();
+      if (error) throw error;
+      if (currentRoute === "create") {
+        window.location.replace("/clinic/?p=auth");
+      } else {
+        renderAuthMethodsAfterSignOut();
+      }
+    } catch (error) {
+      console.error("Could not sign out:", error);
+      setAuthFeedback(error.message || "Could not sign out. Please try again.");
+    }
+  }
+
+  function renderAuthMethodsAfterSignOut() {
+    renderAuthPage();
+    showAuthMethods();
+    syncAuthState(null);
+  }
+
+  function isClinicAdmin(user) {
+    return user?.app_metadata?.role === "clinic_admin";
+  }
+
+  function handleAuthSession(session) {
+    if (currentRoute === "auth") {
+      syncAuthState(session);
+      const next = new URLSearchParams(window.location.search).get("next");
+      if (next === "create" && isClinicAdmin(session?.user)) {
+        window.location.replace("/clinic/?p=create");
+      }
+      return;
+    }
+    if (currentRoute === "create") {
+      if (!session?.user) {
+        window.location.replace("/clinic/?p=auth&next=create");
+      } else if (!isClinicAdmin(session.user)) {
+        renderUnauthorized(session.user);
+      }
+    }
+  }
+
+  function syncAuthState(session) {
+    const methods = document.getElementById("auth-methods");
+    if (!methods) return;
+    const accountState = document.getElementById("auth-account-state");
+    const user = session?.user;
+    if (!user) {
+      accountState?.classList.add("is-hidden");
+      methods.classList.remove("is-hidden");
+      return;
+    }
+
+    methods.classList.add("is-hidden");
+    document.getElementById("email-form")?.classList.add("is-hidden");
+    document.getElementById("phone-form")?.classList.add("is-hidden");
+    document.getElementById("phone-verify-form")?.classList.add("is-hidden");
+    document.getElementById("email-confirmation")?.classList.add("is-hidden");
+    const identity = user.email || user.phone || "Your account";
+    if (accountState) {
+      accountState.innerHTML = `
+        <span class="auth-state-icon" aria-hidden="true">✓</span>
+        <span class="auth-signed-in-label">You’re signed in</span>
+        <strong>${escapeHtml(identity)}</strong>
+        <span class="auth-role-label">${isClinicAdmin(user) ? "Clinic administrator" : "PBTRKR Clinics account"}</span>
+        <button class="auth-button auth-button-secondary" id="auth-sign-out" type="button">Sign Out</button>`;
+      accountState.classList.remove("is-hidden");
+      document.getElementById("auth-sign-out").addEventListener("click", signOut);
+    }
+  }
+
+  function renderAdminGate(user) {
+    if (!user) {
+      window.location.replace("/clinic/?p=auth&next=create");
+      return;
+    }
+    renderUnauthorized(user);
   }
 
   function renderCreateForm() {
@@ -414,10 +727,30 @@
 
   async function initialize() {
     const parameters = new URLSearchParams(window.location.search);
+    const authRequested = parameters.get("p") === "auth";
     const createRequested = parameters.get("p") === "create";
     const eventId = parameters.get("c") || window.location.pathname.match(/^\/clinic\/([^/]+)\/?$/i)?.[1];
 
+    if (authRequested) {
+      currentRoute = "auth";
+      renderAuthPage();
+      if (!supabaseClient) {
+        setAuthFeedback("The sign-in service is unavailable right now. Please try again later.");
+        return;
+      }
+      try {
+        const { data, error } = await supabaseClient.auth.getSession();
+        if (error) throw error;
+        handleAuthSession(data?.session || null);
+      } catch (error) {
+        console.error("Could not load clinic auth session:", error);
+        setAuthFeedback(error.message || "Could not load your account. Please refresh and try again.");
+      }
+      return;
+    }
+
     if (createRequested) {
+      currentRoute = "create";
       if (!supabaseClient) {
         app.innerHTML = '<section class="state-panel">The clinic service is unavailable right now. Please try again later.</section>';
         return;
@@ -425,23 +758,37 @@
       try {
         const { data, error } = await supabaseClient.auth.getSession();
         if (error) throw error;
-        if (!data?.session) {
-          renderAdminGate();
+        const user = data?.session?.user;
+        if (!user) {
+          renderAdminGate(null);
+          return;
+        }
+        if (!isClinicAdmin(user)) {
+          renderAdminGate(user);
           return;
         }
         renderCreateForm();
       } catch (error) {
         console.error("Could not check clinic administrator session:", error);
-        renderAdminGate();
+        app.innerHTML = '<section class="state-panel">Could not verify clinic permissions. Please refresh and try again.</section>';
       }
       return;
     }
 
+    currentRoute = "event";
     if (!eventId) {
       showNotFound();
       return;
     }
     await loadEvent(decodeURIComponent(eventId));
+  }
+
+  if (supabaseClient) {
+    authSubscription = supabaseClient.auth.onAuthStateChange((event, session) => {
+      if (event === "SIGNED_IN" || event === "SIGNED_OUT" || event === "INITIAL_SESSION" || event === "USER_UPDATED") {
+        handleAuthSession(session);
+      }
+    }).data.subscription;
   }
 
   initialize();
