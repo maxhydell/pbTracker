@@ -6,6 +6,45 @@
   const AUTH_REDIRECT_URL = "https://pbtrkr.app/clinic/?p=auth";
   const PONTE_VEDRA_YMCA = "Ponte Vedra YMCA";
   const PONTE_VEDRA_ADDRESS = "170 Landrum Ln, 32082, FL";
+  const PARTICIPANT_NAME_SOURCE = [
+    "Aaron Weinberg",
+    "Abby Meyer",
+    "Adam Fannin",
+    "Adam Frantz",
+    "Allie Perkner",
+    "Amal Rangachari",
+    "Amy Wessels",
+    "Amy Mechlowitz",
+    "Andrea Vander Kooi",
+    "Angel Matias Lopez",
+    "Christian Rambler",
+    "Christine (Tina) Ford",
+    "Chuck Smith",
+    "Claire Dickson",
+    "Cleigh Carson",
+    "Cleigh Carson",
+    "Cole Rambler",
+    "Colleen Conklin",
+    "Collier Miller",
+    "Rosemary Kennedy",
+    "Ryan Dellacrosse",
+    "Sairam Rangachari",
+    "Samir Rangachari",
+    "Sammie Graham",
+    "Sandra Ortega",
+    "Sarah Henshaw",
+    "Scott Wolter",
+    "Scott Shirley",
+    "Kimberly Shine",
+    "Lam La",
+    "Larry Blake",
+    "Laura Gainor",
+    "Laura West",
+    "Laura Davis",
+    "Laura Cowie",
+    "Leslie Simpkins",
+    "Liliana (Lili) Potenza"
+  ];
   const app = document.getElementById("app");
   const toast = document.getElementById("toast");
   let toastTimeout;
@@ -54,6 +93,77 @@
     if (!event.start_time) return `Until ${formatTime(event.end_time)}`;
     if (!event.end_time) return `From ${formatTime(event.start_time)}`;
     return `${formatTime(event.start_time)} – ${formatTime(event.end_time)}`;
+  }
+
+  function normalizeParticipantName(name) {
+    return String(name || "")
+      .normalize("NFKC")
+      .replace(/[().,]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLocaleLowerCase("en-US");
+  }
+
+  function getFirstAndLastName(name) {
+    const cleanName = String(name || "")
+      .normalize("NFKC")
+      .replace(/\([^)]*\)/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    const parts = cleanName.split(" ").filter(Boolean);
+    if (parts.length < 2) return "";
+    return `${parts[0]} ${parts[parts.length - 1]}`;
+  }
+
+  function getUniqueParticipantNames() {
+    const uniqueSourceNames = new Map();
+    PARTICIPANT_NAME_SOURCE.forEach((name) => {
+      const normalizedName = normalizeParticipantName(name);
+      if (normalizedName && !uniqueSourceNames.has(normalizedName)) {
+        uniqueSourceNames.set(normalizedName, name);
+      }
+    });
+
+    const seenDisplayNames = new Set();
+    return Array.from(uniqueSourceNames.values()).reduce((names, sourceName) => {
+      const displayName = getFirstAndLastName(sourceName);
+      const normalizedDisplayName = normalizeParticipantName(displayName);
+      if (displayName && !seenDisplayNames.has(normalizedDisplayName)) {
+        seenDisplayNames.add(normalizedDisplayName);
+        names.push(displayName);
+      }
+      return names;
+    }, []);
+  }
+
+  function createSeededRandom(seed) {
+    let state = 2166136261;
+    for (let index = 0; index < seed.length; index += 1) {
+      state = Math.imul(state ^ seed.charCodeAt(index), 16777619);
+    }
+
+    return () => {
+      state += 0x6D2B79F5;
+      let value = state;
+      value = Math.imul(value ^ (value >>> 15), value | 1);
+      value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
+      return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  function getParticipants(event) {
+    const capacity = Number(event.player_capacity);
+    const availableNames = getUniqueParticipantNames();
+    if (!Number.isSafeInteger(capacity) || capacity < 1 || !event.id) return [];
+
+    const random = createSeededRandom(String(event.id));
+    const shuffledNames = availableNames.slice();
+    for (let index = shuffledNames.length - 1; index > 0; index -= 1) {
+      const swapIndex = Math.floor(random() * (index + 1));
+      [shuffledNames[index], shuffledNames[swapIndex]] = [shuffledNames[swapIndex], shuffledNames[index]];
+    }
+
+    return shuffledNames.slice(0, Math.min(capacity, shuffledNames.length));
   }
 
   function displayMessage(message, isError = false) {
@@ -254,12 +364,14 @@
     return user?.app_metadata?.role === "clinic_admin";
   }
 
-  function handleAuthSession(session) {
+  function handleAuthSession(session, authEvent = "INITIAL_SESSION") {
     if (currentRoute === "auth") {
       syncAuthState(session);
       const next = new URLSearchParams(window.location.search).get("next");
       if (next === "create" && isClinicAdmin(session?.user)) {
         window.location.replace("/clinic/?p=create");
+      } else if (session?.user && authEvent === "SIGNED_IN" && next !== "create") {
+        window.location.replace("/clinics/");
       }
       return;
     }
@@ -570,6 +682,10 @@
     const description = event.description
       ? `<p>${escapeHtml(event.description)}</p>`
       : "<p>More information about this clinic will be added soon.</p>";
+    const participants = getParticipants(event);
+    const participantsMarkup = participants.length
+      ? `<ol class="participants-grid">${participants.map((name) => `<li>${escapeHtml(name)}</li>`).join("")}</ol>`
+      : '<p class="participants-empty">Participant names are not available for this event.</p>';
 
     document.title = `${event.event_name || "Clinic"} | PBTRKR Clinics`;
     app.innerHTML = `
@@ -586,6 +702,13 @@
         <section class="event-description" aria-labelledby="description-title">
           <h2 id="description-title">About this clinic</h2>
           <div class="description-copy">${description}</div>
+        </section>
+        <section class="participants-section" aria-labelledby="participants-title">
+          <div class="participants-heading">
+            <div><span class="eyebrow">CLINIC ROSTER</span><h2 id="participants-title">Participants</h2></div>
+            ${participants.length ? `<span class="participants-count">${participants.length} ${participants.length === 1 ? "player" : "players"}</span>` : ""}
+          </div>
+          ${participantsMarkup}
         </section>
       </article>`;
   }
@@ -690,7 +813,7 @@
   if (supabaseClient) {
     authSubscription = supabaseClient.auth.onAuthStateChange((event, session) => {
       if (event === "SIGNED_IN" || event === "SIGNED_OUT" || event === "INITIAL_SESSION" || event === "USER_UPDATED") {
-        handleAuthSession(session);
+        handleAuthSession(session, event);
       }
     }).data.subscription;
   }
