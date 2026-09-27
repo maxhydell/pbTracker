@@ -165,7 +165,7 @@
   function updateAccountButton(session) {
     if (!accountButton) return;
     const user = session?.user;
-    accountButton.textContent = user?.email || user?.phone || (user ? "Account" : "Sign In");
+    accountButton.textContent = user?.email || (user ? "Account" : "Sign In");
     accountButton.href = "/clinic/?p=auth";
     accountButton.title = user ? "Manage your Clinics account" : "Sign in to Clinics";
     accountButton.classList.toggle("button-secondary", true);
