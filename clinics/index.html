@@ -1,1 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101411">
+  <meta name="description" content="Browse PBTRKR pickleball clinics and events.">
+  <link rel="icon" href="/logo.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="clinics.css">
+  <title>Clinics | PBTRKR</title>
+</head>
+<body>
+  <div class="site-shell">
+    <header class="site-header">
+      <a class="brand" href="/clinics" aria-label="PBTRKR Clinics home">
+        <img src="/logo.png" alt="">
+        <span class="brand-name">PBTRKR</span>
+        <span class="brand-divider" aria-hidden="true"></span>
+        <span class="brand-section">Clinics</span>
+      </a>
+      <a class="button button-primary" href="/clinic/?p=create"><span aria-hidden="true">＋</span> Create Event</a>
+    </header>
 
+    <main>
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="hero-copy">
+          <span class="eyebrow"><span class="eyebrow-dot"></span> PBTRKR CLINICS</span>
+          <h1 id="hero-title">Make your next<br><span>game-changing</span> move.</h1>
+          <p>Find a clinic, sharpen your skills, and bring your game to the next level.</p>
+        </div>
+        <div class="hero-count" aria-label="Published events">
+          <span class="hero-count-number" id="event-count">—</span>
+          <span class="hero-count-label">UPCOMING<br>EVENTS</span>
+          <svg class="hero-mark" viewBox="0 0 180 180" aria-hidden="true"><circle cx="90" cy="90" r="69"/><circle cx="90" cy="90" r="51"/><path d="M90 21v18M159 90h-18M90 159v-18M21 90h18"/></svg>
+        </div>
+      </section>
+
+      <section class="events-section" aria-labelledby="events-title">
+        <div class="section-heading">
+          <div><span class="eyebrow">FIND YOUR NEXT CLINIC</span><h2 id="events-title">Upcoming events</h2></div>
+          <p class="section-note">Good games start with good reps.</p>
+        </div>
+        <div id="event-list" class="event-list" aria-live="polite"><div class="state-card"><span class="spinner" aria-hidden="true"></span><span>Finding upcoming clinics…</span></div></div>
+      </section>
+    </main>
+
+    <footer class="site-footer"><span>PBTRKR <span aria-hidden="true">·</span> Play your next point.</span><span>Clinics &amp; Events</span></footer>
+  </div>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="clinics.js"></script>
+</body>
+</html>
