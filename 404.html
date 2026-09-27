@@ -6,6 +6,12 @@
   <script>
     (function () {
       var path = window.location.pathname || "";
+      var clinicMatch = path.match(/^\/clinic\/([^/]+)\/?$/i);
+      if (clinicMatch) {
+        window.location.replace("/clinic/?c=" + encodeURIComponent(clinicMatch[1]) + window.location.hash);
+        return;
+      }
+
       var match = path.toLowerCase().match(/\/pbtracker\/(rankings|schedule|sets)\//);
       var route = match ? match[1] : "input";
       var query = window.location.search || "";
