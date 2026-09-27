@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#101411">
+  <meta name="theme-color" content="#0b1220">
   <meta name="description" content="Browse PBTRKR pickleball clinics and events.">
   <link rel="icon" href="/logo.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="clinics.css?v=20260927-2">
+  <link rel="stylesheet" href="clinics.css?v=20260927-3">
   <title>Clinics | PBTRKR</title>
 </head>
 <body>
@@ -22,7 +22,15 @@
         <span class="brand-section">Clinics</span>
       </a>
       <div class="header-actions">
-        <a class="button button-secondary" id="account-button" href="/clinic/?p=auth">Sign In</a>
+        <div class="account-menu" id="account-menu">
+          <a class="button button-secondary" id="account-button" href="/clinic/?p=auth" aria-haspopup="dialog" aria-expanded="false">Sign In</a>
+          <section class="account-popover is-hidden" id="account-popover" role="dialog" aria-label="Account">
+            <span class="account-popover-title">Account</span>
+            <strong class="account-popover-email" id="account-email"></strong>
+            <div class="account-role-row"><span>Role</span><strong id="account-role">Account</strong></div>
+            <button class="button account-sign-out" id="account-sign-out" type="button">Sign Out</button>
+          </section>
+        </div>
         <a class="button button-primary" id="create-event-button" href="/clinic/?p=create"><span aria-hidden="true">＋</span> Create Event</a>
       </div>
     </header>
@@ -36,17 +44,17 @@
         </div>
         <div class="hero-count" aria-label="Published events">
           <span class="hero-count-number" id="event-count">—</span>
-          <span class="hero-count-label">UPCOMING<br>EVENTS</span>
+          <span class="hero-count-label">PUBLISHED<br>EVENTS</span>
           <svg class="hero-mark" viewBox="0 0 180 180" aria-hidden="true"><circle cx="90" cy="90" r="69"/><circle cx="90" cy="90" r="51"/><path d="M90 21v18M159 90h-18M90 159v-18M21 90h18"/></svg>
         </div>
       </section>
 
       <section class="events-section" aria-labelledby="events-title">
         <div class="section-heading">
-          <div><span class="eyebrow">FIND YOUR NEXT CLINIC</span><h2 id="events-title">Upcoming events</h2></div>
+          <div><span class="eyebrow">FIND YOUR NEXT CLINIC</span><h2 id="events-title">Events</h2></div>
           <p class="section-note">Good games start with good reps.</p>
         </div>
-        <div id="event-list" class="event-list" aria-live="polite"><div class="state-card"><span class="spinner" aria-hidden="true"></span><span>Finding upcoming clinics…</span></div></div>
+        <div id="event-list" class="event-list" aria-live="polite"><div class="state-card"><span class="spinner" aria-hidden="true"></span><span>Finding published clinics…</span></div></div>
       </section>
     </main>
 
@@ -54,6 +62,6 @@
   </div>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="clinics.js?v=20260927-2"></script>
+  <script src="clinics.js?v=20260927-3"></script>
 </body>
 </html>

@@ -7,7 +7,13 @@
   const eventCount = document.getElementById("event-count");
   const toast = document.getElementById("toast");
   const accountButton = document.getElementById("account-button");
+  const accountMenu = document.getElementById("account-menu");
+  const accountPopover = document.getElementById("account-popover");
+  const accountEmail = document.getElementById("account-email");
+  const accountRole = document.getElementById("account-role");
+  const accountSignOut = document.getElementById("account-sign-out");
   const createEventButton = document.getElementById("create-event-button");
+  let currentSession = null;
   let toastTimeout;
 
   const supabaseClient = window.supabase?.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
@@ -74,7 +80,10 @@
     const availabilityClass = event.is_full ? "status-full" : "status-open";
 
     return `
-      <article class="event-card">
+      <article class="event-card" data-event-id="${escapeHtml(event.id)}">
+        <button class="delete-event-button" type="button" data-delete-event="${escapeHtml(event.id)}" data-event-name="${escapeHtml(event.event_name || "Untitled clinic")}" aria-label="Delete event" title="Delete event">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3m3 0-.8 13H6.8L6 7m4 4v5m4-5v5"/></svg>
+        </button>
         <div class="event-main">
           <h3 class="event-name">${escapeHtml(event.event_name || "Untitled clinic")}</h3>
           <div class="event-subtitle">${event.player_capacity ? `${escapeHtml(event.player_capacity)} player spots` : "All skill-building, all welcome."}</div>
@@ -95,8 +104,8 @@
         </div>
         <div class="event-status"><span class="status ${availabilityClass}">${availability}</span></div>
         <div class="event-actions">
-          <a class="button button-primary" href="${escapeHtml(url)}">Click <span aria-hidden="true">→</span></a>
-          <button class="button button-secondary" type="button" data-copy-url="${escapeHtml(url)}">Copy</button>
+          <a class="button button-primary" href="${escapeHtml(url)}">Visit <span aria-hidden="true">→</span></a>
+          <button class="button button-secondary" type="button" data-copy-url="${escapeHtml(url)}">Copy 🔗</button>
         </div>
       </article>`;
   }
@@ -132,22 +141,17 @@
       return;
     }
 
-    const today = new Date();
-    const todayString = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
     const filters = {
       status: "published",
-      event_date_gte: todayString,
-      order: ["event_date.asc", "start_time.asc"]
+      order: "created_at.desc"
     };
 
     try {
       const { data, error } = await supabaseClient
         .from("clinic_events")
-        .select("id,event_name,event_date,start_time,end_time,player_capacity,location,address,is_full,status")
+        .select("id,event_name,event_date,start_time,end_time,player_capacity,location,address,is_full,status,created_at")
         .eq("status", "published")
-        .gte("event_date", todayString)
-        .order("event_date", { ascending: true })
-        .order("start_time", { ascending: true });
+        .order("created_at", { ascending: false });
 
       if (error) throw error;
 
@@ -155,17 +159,17 @@
       eventCount.textContent = String(events.length);
 
       if (!events.length) {
-        console.info("[PBTRKR Clinics] No upcoming published events matched the dashboard filters.", filters);
+        console.info("[PBTRKR Clinics] No published events matched the dashboard filters.", filters);
       }
 
       if (!events.length) {
-        eventList.innerHTML = '<div class="state-card state-card-empty"><div><strong>No upcoming clinics just yet.</strong>Check back soon for the next chance to level up your game.</div></div>';
+        eventList.innerHTML = '<div class="state-card state-card-empty"><div><strong>No published clinics just yet.</strong>Check back soon for the next chance to level up your game.</div></div>';
         return;
       }
 
       eventList.innerHTML = events.map(renderEvent).join("");
     } catch (error) {
-      console.error("[PBTRKR Clinics] Upcoming event query failed.", {
+      console.error("[PBTRKR Clinics] Published event query failed.", {
         filters,
         message: error?.message,
         code: error?.code,
@@ -180,11 +184,29 @@
 
   function updateAccountButton(session) {
     if (!accountButton) return;
+    currentSession = session || null;
     const user = session?.user;
     accountButton.textContent = user?.email || (user ? "Account" : "Sign In");
     accountButton.href = "/clinic/?p=auth";
     accountButton.title = user ? "Manage your Clinics account" : "Sign in to Clinics";
     accountButton.classList.toggle("button-secondary", true);
+    accountButton.setAttribute("aria-expanded", "false");
+    if (accountEmail) accountEmail.textContent = user?.email || "Account";
+    if (accountRole) accountRole.textContent = user?.app_metadata?.role === "clinic_admin" ? "Clinic Administrator" : "Account";
+    closeAccountPopover();
+  }
+
+  function closeAccountPopover() {
+    if (!accountPopover || !accountButton) return;
+    accountPopover.classList.add("is-hidden");
+    accountButton.setAttribute("aria-expanded", "false");
+  }
+
+  function toggleAccountPopover() {
+    if (!accountPopover || !accountButton) return;
+    const willOpen = accountPopover.classList.contains("is-hidden");
+    accountPopover.classList.toggle("is-hidden", !willOpen);
+    accountButton.setAttribute("aria-expanded", String(willOpen));
   }
 
   async function handleCreateEventClick(event) {
@@ -212,7 +234,28 @@
   if (supabaseClient) {
     accountButton.addEventListener("click", (event) => {
       event.preventDefault();
-      window.location.assign("/clinic/?p=auth");
+      if (currentSession?.user) toggleAccountPopover();
+      else window.location.assign("/clinic/?p=auth");
+    });
+    accountSignOut.addEventListener("click", async () => {
+      accountSignOut.disabled = true;
+      try {
+        const { error } = await supabaseClient.auth.signOut();
+        if (error) throw error;
+        updateAccountButton(null);
+        showToast("Signed out.");
+      } catch (error) {
+        console.error("Could not sign out of clinic account:", error);
+        showToast("Could not sign out. Please try again.");
+      } finally {
+        accountSignOut.disabled = false;
+      }
+    });
+    document.addEventListener("click", (event) => {
+      if (accountMenu && !accountMenu.contains(event.target)) closeAccountPopover();
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") closeAccountPopover();
     });
     createEventButton.addEventListener("click", handleCreateEventClick);
     supabaseClient.auth.getSession()
@@ -229,7 +272,56 @@
   eventList.addEventListener("click", (event) => {
     const button = event.target.closest("[data-copy-url]");
     if (button) copyEventUrl(button);
+    const deleteButton = event.target.closest("[data-delete-event]");
+    if (deleteButton) deleteClinicEvent(deleteButton);
   });
+
+  async function deleteClinicEvent(button) {
+    if (!supabaseClient) {
+      showToast("The event service is unavailable right now.");
+      return;
+    }
+
+    button.disabled = true;
+    try {
+      const { data: sessionData, error: sessionError } = await supabaseClient.auth.getSession();
+      if (sessionError) throw sessionError;
+      const user = sessionData?.session?.user;
+      if (!user) {
+        window.location.assign("/clinic/?p=auth");
+        return;
+      }
+      if (user.app_metadata?.role !== "clinic_admin") {
+        showToast("Only clinic administrators can delete events.");
+        return;
+      }
+
+      const eventName = button.dataset.eventName || "this event";
+      if (!window.confirm(`Delete this event?\n\n${eventName}`)) return;
+
+      const { data: deletedEvent, error } = await supabaseClient
+        .from("clinic_events")
+        .delete()
+        .eq("id", button.dataset.deleteEvent)
+        .select("id")
+        .maybeSingle();
+      if (error) throw error;
+      if (!deletedEvent) throw new Error("The event was not deleted. Check the administrator policy and try again.");
+
+      button.closest(".event-card")?.remove();
+      const remainingCount = eventList.querySelectorAll(".event-card").length;
+      eventCount.textContent = String(remainingCount);
+      if (!remainingCount) {
+        eventList.innerHTML = '<div class="state-card state-card-empty"><div><strong>No published clinics just yet.</strong>Check back soon for the next chance to level up your game.</div></div>';
+      }
+      showToast("Event deleted.");
+    } catch (error) {
+      console.error("Could not delete clinic event:", error);
+      showToast(error?.message || "Could not delete the event. Please try again.");
+    } finally {
+      button.disabled = false;
+    }
+  }
 
   loadEvents();
 })();
