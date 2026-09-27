@@ -1,8 +1,8 @@
 :root {
   color-scheme: dark;
-  --bg: #101411;
-  --surface: #171d19;
-  --surface-raised: #1c231e;
+  --bg: #0f141c; 
+  --surface: #151c27;
+  --surface-raised: #1b2432;  
   --line: rgba(235, 242, 231, .09);
   --text: #f2f4ed;
   --muted: #a0a99f;
