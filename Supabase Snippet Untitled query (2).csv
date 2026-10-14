@@ -1,0 +1,15 @@
+tablename,indexname,indexdef
+clinic_events,clinic_events_created_at_idx,CREATE INDEX clinic_events_created_at_idx ON public.clinic_events USING btree (created_at DESC)
+clinic_events,clinic_events_event_date_idx,CREATE INDEX clinic_events_event_date_idx ON public.clinic_events USING btree (event_date)
+clinic_events,clinic_events_pkey,CREATE UNIQUE INDEX clinic_events_pkey ON public.clinic_events USING btree (id)
+clinic_events,clinic_events_published_date_idx,"CREATE INDEX clinic_events_published_date_idx ON public.clinic_events USING btree (event_date, start_time) WHERE (status = 'published'::text)"
+clinic_events,clinic_events_status_idx,CREATE INDEX clinic_events_status_idx ON public.clinic_events USING btree (status)
+device_whitelist,device_whitelist_pkey,CREATE UNIQUE INDEX device_whitelist_pkey ON public.device_whitelist USING btree (device_id)
+events,events_pkey,CREATE UNIQUE INDEX events_pkey ON public.events USING btree (id)
+history,history_pkey,CREATE UNIQUE INDEX history_pkey ON public.history USING btree (id)
+match_rating_logs,match_rating_logs_pkey,CREATE UNIQUE INDEX match_rating_logs_pkey ON public.match_rating_logs USING btree (id)
+players,players_pkey,CREATE UNIQUE INDEX players_pkey ON public.players USING btree (id)
+rating_history,rating_history_pkey,CREATE UNIQUE INDEX rating_history_pkey ON public.rating_history USING btree (id)
+rating_history,unique_event_player,"CREATE UNIQUE INDEX unique_event_player ON public.rating_history USING btree (player_name, event_name)"
+visitors,visitors_clinic_event_id_time_idx,"CREATE INDEX visitors_clinic_event_id_time_idx ON public.visitors USING btree (clinic_event_id, ""time"" DESC) WHERE (clinic_event_id IS NOT NULL)"
+visitors,visitors_pkey,CREATE UNIQUE INDEX visitors_pkey ON public.visitors USING btree (id)

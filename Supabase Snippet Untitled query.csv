@@ -1,0 +1,101 @@
+table_name,ordinal_position,column_name,data_type,is_nullable,column_default
+clinic_events,1,id,uuid,NO,gen_random_uuid()
+clinic_events,2,event_name,text,NO,null
+clinic_events,3,event_date,date,NO,null
+clinic_events,4,start_time,time without time zone,NO,null
+clinic_events,5,end_time,time without time zone,NO,null
+clinic_events,6,description,text,NO,null
+clinic_events,7,player_capacity,integer,NO,null
+clinic_events,8,location,text,NO,null
+clinic_events,9,address,text,NO,null
+clinic_events,10,is_full,boolean,NO,true
+clinic_events,11,status,text,NO,'draft'::text
+clinic_events,12,created_at,timestamp with time zone,NO,now()
+clinic_events,13,updated_at,timestamp with time zone,NO,now()
+clinic_events,14,published_at,timestamp with time zone,YES,null
+device_whitelist,1,device_id,text,NO,null
+device_whitelist,2,timestamp,timestamp with time zone,NO,null
+events,1,id,uuid,NO,gen_random_uuid()
+events,2,name,text,YES,null
+events,3,event_date,date,YES,null
+events,4,created_at,timestamp without time zone,YES,now()
+history,1,id,bigint,NO,null
+history,2,Date,date,NO,null
+history,3,Player,text,YES,null
+history,4,WinPct,text,YES,null
+history,5,PointsAvg,text,YES,null
+history,6,player_name,text,YES,null
+legacy_history_stage,1,c1,text,YES,null
+legacy_history_stage,2,c2,text,YES,null
+legacy_history_stage,3,c3,text,YES,null
+legacy_history_stage,4,c4,text,YES,null
+legacy_rankings_stage,1,c1,text,YES,null
+legacy_rankings_stage,2,c2,text,YES,null
+legacy_rankings_stage,3,c3,text,YES,null
+legacy_rankings_stage,4,c4,text,YES,null
+legacy_rankings_stage,5,c5,text,YES,null
+legacy_rankings_stage,6,c6,text,YES,null
+legacy_rankings_stage,7,c7,text,YES,null
+legacy_rankings_stage,8,c8,text,YES,null
+legacy_rankings_stage,9,c9,text,YES,null
+legacy_schedule_stage,1,c1,text,YES,null
+legacy_schedule_stage,2,c2,text,YES,null
+legacy_schedule_stage,3,c3,text,YES,null
+legacy_schedule_stage,4,c4,text,YES,null
+legacy_schedule_stage,5,c5,text,YES,null
+legacy_schedule_stage,6,c6,text,YES,null
+legacy_schedule_stage,7,c7,text,YES,null
+legacy_schedule_stage,8,c8,text,YES,null
+legacy_schedule_stage,9,c9,text,YES,null
+legacy_schedule_stage,10,c10,text,YES,null
+legacy_schedule_stage,11,c11,text,YES,null
+legacy_sets_stage,1,c1,text,YES,null
+legacy_sets_stage,2,c2,text,YES,null
+legacy_sets_stage,3,c3,text,YES,null
+legacy_sets_stage,4,c4,text,YES,null
+legacy_sets_stage,5,c5,text,YES,null
+legacy_sets_stage,6,c6,text,YES,null
+legacy_sets_stage,7,c7,text,YES,null
+legacy_sets_stage,8,c8,text,YES,null
+legacy_sets_stage,9,c9,text,YES,null
+legacy_sets_stage,10,c10,text,YES,null
+legacy_sets_stage,11,c11,text,YES,null
+legacy_sets_stage,12,c12,text,YES,null
+legacy_sets_stage,13,c13,text,YES,null
+legacy_sets_stage,14,c14,text,YES,null
+legacy_sets_stage,15,c15,text,YES,null
+legacy_shared_results_stage,1,c1,text,YES,null
+legacy_shared_results_stage,2,c2,text,YES,null
+legacy_shared_results_stage,3,c3,text,YES,null
+legacy_sorted_rankings_stage,1,c1,text,YES,null
+legacy_sorted_rankings_stage,2,c2,text,YES,null
+legacy_sorted_rankings_stage,3,c3,text,YES,null
+legacy_sorted_rankings_stage,4,c4,text,YES,null
+legacy_sorted_rankings_stage,5,c5,text,YES,null
+legacy_sorted_rankings_stage,6,c6,text,YES,null
+legacy_sorted_rankings_stage,7,c7,text,YES,null
+legacy_sorted_rankings_stage,8,c8,text,YES,null
+legacy_telegram_log_stage,1,c1,text,YES,null
+legacy_telegram_log_stage,2,c2,text,YES,null
+legacy_telegram_log_stage,3,c3,text,YES,null
+match_rating_logs,1,id,uuid,NO,gen_random_uuid()
+match_rating_logs,2,player_name,text,YES,null
+match_rating_logs,3,event_id,text,YES,null
+match_rating_logs,4,opponent_1,text,YES,null
+match_rating_logs,5,opponent_2,text,YES,null
+match_rating_logs,6,partner,text,YES,null
+match_rating_logs,7,score_for,integer,YES,null
+match_rating_logs,8,score_against,integer,YES,null
+match_rating_logs,9,expected_win,double precision,YES,null
+match_rating_logs,10,actual_result,integer,YES,null
+match_rating_logs,11,margin_multiplier,double precision,YES,null
+match_rating_logs,12,delta,double precision,YES,null
+match_rating_logs,13,created_at,timestamp without time zone,YES,now()
+match_rating_logs,14,set_number,integer,YES,null
+match_rating_logs,15,delta_A,double precision,YES,null
+match_rating_logs,16,delta_B,double precision,YES,null
+match_rating_logs,17,opponent_avg,double precision,YES,null
+match_rating_logs,18,timestamp,timestamp with time zone,YES,now()
+players,1,id,uuid,NO,gen_random_uuid()
+players,2,name,text,NO,null
+players,3,DUPR,numeric,YES,null

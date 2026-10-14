@@ -3,6 +3,11 @@ const API_URL = "https://script.google.com/macros/s/AKfycby4qKg6keATxddieVGNnkAh
 
 
 const memoryCache = {};
+const SUPABASE_READ_ACTIONS = new Set([
+  "getAllData", "getPlayers", "getRankings", "getUserTrend", "getSchedule",
+  "getTodaySets", "getAllSets", "getHistory", "getPreviousHistoryEntry",
+  "lastUpdated", "getSharedResult"
+]);
 let playersCache = [];
 let isEditingScores = false;
 let historyCache = [];
@@ -22,7 +27,6 @@ const LS_MORNING_WINPCT = "pbTracker_morningWinPct";
 const LS_SCHEDULE_WEEK_ANCHOR = "pbTracker_scheduleWeekAnchor_v1";
 const LS_DEVICE_ID = "pbTracker_deviceId_v1";
 const LS_DEVICE_VERIFIED = "pbTracker_deviceVerified_v1";
-const ACCESS_CODE = "ymcapickle";
 
 // Power Rating Rating Constants
 const BITE_STRENGTH_K = 0.75;
@@ -45,7 +49,7 @@ let globalData = {
 };
 
 let userIp = null;
-let isEditingLocked = false;
+let isEditingLocked = true;
 let loadingProgress = 0;
 let rankingsComponentsReady = false;
 let deviceId = null;
@@ -114,6 +118,10 @@ function collectSetScoresFromDom(setNumber) {
     : Array.from(document.querySelectorAll(`.match-card[data-set="${setNumber}"]`));
 
   return cards.map(card => {
+    if (card.hasAttribute("data-raw-score")) {
+      return card.getAttribute("data-raw-score") || "";
+    }
+
     const inputs = card.querySelectorAll(".score-editable input");
     if (inputs.length < 2) return "";
 
@@ -146,31 +154,39 @@ function getOrCreateDeviceId() {
 
 async function checkDeviceWhitelist() {
   try {
+    if (window.PBTRKR_USE_SUPABASE_DATA !== true) {
+      isEditingLocked = false;
+      localStorage.setItem(LS_DEVICE_VERIFIED, "1");
+      return;
+    }
+
     updateLoadingProgress(15, "Verifying device...");
 
     const id = getOrCreateDeviceId();
 
     if (!window.supabaseClient) {
       console.warn("⚠️ Supabase client not available, cannot check whitelist");
-      return;
-    }
-
-    // Check if device is whitelisted
-    const { data, error } = await window.supabaseClient
-      .from("device_whitelist")
-      .select("*")
-      .eq("device_id", id);
-
-    if (error) {
-      console.error("❌ Whitelist check error:", error);
       isEditingLocked = true;
-      setTimeout(() => {
-        showAccessRestrictionPopup();
-      }, 500);
+      localStorage.removeItem(LS_DEVICE_VERIFIED);
       return;
     }
 
-    if (data && data.length > 0) {
+    const { data: authData, error: authError } = await window.supabaseClient.auth.getSession();
+    const session = authData?.session;
+    const role = session?.user?.app_metadata?.role;
+    if (authError || !session || !["pbtrkr_editor", "pbtrkr_admin"].includes(role)) {
+      isEditingLocked = true;
+      localStorage.removeItem(LS_DEVICE_VERIFIED);
+      setTimeout(showAccessRestrictionPopup, 500);
+      return;
+    }
+
+    if (!window.pbtrkrDataService) {
+      throw new Error("PBTRKR Supabase data service is unavailable");
+    }
+    const authorized = await window.pbtrkrDataService.isDeviceAuthorized(id);
+
+    if (authorized) {
       isEditingLocked = false;
       localStorage.setItem(LS_DEVICE_VERIFIED, "1");
       console.log("✅ Device whitelisted:", id);
@@ -188,11 +204,24 @@ async function checkDeviceWhitelist() {
   }
 }
 
+if (window.supabaseClient?.auth?.onAuthStateChange) {
+  window.supabaseClient.auth.onAuthStateChange(() => {
+    isEditingLocked = true;
+    localStorage.removeItem(LS_DEVICE_VERIFIED);
+    if (appBootComplete) {
+      checkDeviceWhitelist().then(() => {
+        lockEditingIfNeeded();
+        if (document.getElementById("players")?.classList.contains("active")) loadPlayersList();
+      });
+    }
+  });
+}
+
 function isPlayersPageAccessAllowed() {
   getOrCreateDeviceId();
+  if (window.PBTRKR_USE_SUPABASE_DATA !== true) return true;
   if (!window.supabaseClient) return false;
-  if (localStorage.getItem(LS_DEVICE_VERIFIED) === "1") return true;
-  return false;
+  return !isEditingLocked && localStorage.getItem(LS_DEVICE_VERIFIED) === "1";
 }
 
 async function loadCriticalPageData(pageId) {
@@ -321,6 +350,11 @@ function queueBackgroundStartup(pageId) {
 
 
 function showAccessRestrictionPopup() {
+  if (window.PBTRKR_USE_SUPABASE_DATA !== true) {
+    isEditingLocked = false;
+    return;
+  }
+
   const popupConfigs = [
     { pageId: "input", popupId: "accessRestrictionPopup-input", inputId: "accessCode" },
     { pageId: "schedule", popupId: "accessRestrictionPopup-schedule", inputId: "accessCodeSchedule" },
@@ -342,16 +376,24 @@ function showAccessRestrictionPopup() {
       <div class="player-onboard-inner">
         <div class="player-onboard-text">
           <h3>⚠️ Editing Access Required</h3>
-          <p>You currently don't have editing access. Enter the access code to proceed.</p>
+          <p>Sign in with your approved PBTRKR editor email to edit tracker data.</p>
           <div style="margin-top: 15px;">
-            <input id="${inputId}" type="password" placeholder="Enter access code" class="onboard-input" onkeypress="if(event.key==='Enter') verifyAccessCode()" />
-            <button onclick="verifyAccessCode()" style="margin-top: 10px; width: 100%; padding: 10px; background: #4fc3ff; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; color: #000;">Unlock</button>
+            <input id="${inputId}" type="email" autocomplete="email" placeholder="Editor email" class="onboard-input" onkeypress="if(event.key==='Enter') verifyAccessCode()" />
+            <button onclick="verifyAccessCode()" style="margin-top: 10px; width: 100%; padding: 10px; background: #4fc3ff; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; color: #000;">Send secure sign-in link</button>
+            <button id="approveDeviceBtn-${pageId}" onclick="approveCurrentDevice()" style="display:none; margin-top: 10px; width: 100%; padding: 10px; background: #24364a; border: 1px solid #4fc3ff; border-radius: 6px; cursor: pointer; font-weight: bold; color: #eaf7ff;">Approve this device</button>
           </div>
         </div>
       </div>
     `;
 
     container.insertBefore(popup, container.firstChild);
+  });
+
+  window.supabaseClient?.auth.getSession().then(({ data }) => {
+    if (data?.session?.user?.app_metadata?.role !== "pbtrkr_admin") return;
+    document.querySelectorAll('[id^="approveDeviceBtn-"]').forEach(button => {
+      button.style.display = "block";
+    });
   });
 
   const activeInput = document.querySelector('.page.active #accessCode, .page.active #accessCodeSchedule, .page.active #accessCodeSets')
@@ -362,66 +404,43 @@ function showAccessRestrictionPopup() {
 }
 
 async function verifyAccessCode() {
-  const codeInput = [
+  if (window.PBTRKR_USE_SUPABASE_DATA !== true) return;
+
+  const inputEl = [
     document.querySelector('.page.active #accessCode'),
     document.querySelector('.page.active #accessCodeSchedule'),
     document.querySelector('.page.active #accessCodeSets'),
     document.getElementById("accessCode"),
     document.getElementById("accessCodeSchedule"),
-    document.getElementById("accessCodeSets")
+    document.getElementById("accessCodeSets"),
+    document.getElementById("playersAccessCode")
   ].find(input => input && String(input.value || "").trim());
+  if (!inputEl || !window.supabaseClient) return;
 
-  const fallbackInput = document.querySelector('.page.active #accessCode, .page.active #accessCodeSchedule, .page.active #accessCodeSets')
-    || document.getElementById("accessCode")
-    || document.getElementById("accessCodeSchedule")
-    || document.getElementById("accessCodeSets");
-  const inputEl = codeInput || fallbackInput;
-  if (!inputEl) return;
-
-  const code = String(inputEl.value || "").trim();
-
-  if (code === ACCESS_CODE) {
-    const whitelisted = await ensureCurrentDeviceWhitelisted();
-    if (!whitelisted) {
-      console.error("❌ Failed to unlock access after correct code");
-      return;
-    }
-    console.log("✅ Access unlocked");
-
-    [
-      "accessRestrictionPopup-input",
-      "accessRestrictionPopup-schedule",
-      "accessRestrictionPopup-sets"
-    ].forEach(id => {
-      const popup = document.getElementById(id);
-      if (popup) popup.remove();
-    });
-
-    const setInputs = document.querySelectorAll(".score-editable input, .player-input, .match-card input");
-    const buttons = document.querySelectorAll(".set-save-btn, #scheduleSaveBtn, #doneBtn, .sms-btn, .check-btn, .add-game-btn, .add-player-btn");
-
-    setInputs.forEach(input => {
-      input.disabled = false;
-      input.style.opacity = "1";
-      input.style.cursor = "pointer";
-      input.style.pointerEvents = "";
-    });
-
-    buttons.forEach(btn => {
-      btn.disabled = false;
-      btn.style.opacity = "1";
-      btn.style.cursor = "pointer";
-      btn.style.pointerEvents = "";
-    });
-
-    showAccessUnlockedMessage();
-  } else {
+  const email = String(inputEl.value || "").trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     inputEl.style.border = "2px solid #dc2626";
     inputEl.value = "";
-    setTimeout(() => {
-      inputEl.style.border = "";
-    }, 2000);
+    setTimeout(() => { inputEl.style.border = ""; }, 2000);
+    return;
   }
+
+  const { error } = await window.supabaseClient.auth.signInWithOtp({
+    email,
+    options: {
+      shouldCreateUser: false,
+      emailRedirectTo: window.location.href
+    }
+  });
+
+  if (error) {
+    console.error("❌ Supabase sign-in link request failed:", error);
+    alert("Unable to send the sign-in link. Confirm this email is provisioned for PBTRKR editing.");
+    return;
+  }
+
+  inputEl.value = "";
+  alert("A secure sign-in link was sent to your email. After signing in, this device must be approved by a PBTRKR admin.");
 }
 
 function showAccessUnlockedMessage() {
@@ -444,6 +463,10 @@ function showAccessUnlockedMessage() {
 }
 
 function lockEditingIfNeeded() {
+  if (window.PBTRKR_USE_SUPABASE_DATA !== true) {
+    isEditingLocked = false;
+    return;
+  }
   if (!isEditingLocked) return;
 
   console.log("🔒 LOCKING EDITING - IP NOT WHITELISTED");
@@ -722,8 +745,8 @@ function normalizePlayerLookupName(name) {
 async function loadPlayers() {
   playersCache = await callAPI({ action: "getPlayers" });
   
-  // Augment with Supabase data if available
-  if (window.supabaseClient && Array.isArray(playersCache)) {
+  // Augment with Supabase data only when the Supabase path is active.
+  if (window.PBTRKR_USE_SUPABASE_DATA === true && window.supabaseClient && Array.isArray(playersCache)) {
     try {
       const { data: supabasePlayerData, error } = await window.supabaseClient
         .from('players')
@@ -848,9 +871,23 @@ function formatNames(str) {
 
 async function callAPI(params, options = {}) {
   try {
-    // 🔥 1. CREATE CACHE KEY
     const key = JSON.stringify(params);
+    if (window.PBTRKR_USE_SUPABASE_DATA === true) {
+      if (!window.pbtrkrDataService) {
+        throw new Error("PBTRKR Supabase data service is unavailable");
+      }
+      const cacheable = SUPABASE_READ_ACTIONS.has(params.action);
+      if (cacheable && memoryCache[key] && !options.force) return memoryCache[key];
+      const data = await window.pbtrkrDataService.call(params);
+      if (cacheable && data && !data.error) {
+        memoryCache[key] = data;
+      } else if (!cacheable) {
+        clearMemoryCache();
+      }
+      return data;
+    }
 
+    // 🔥 1. CREATE CACHE KEY
     // 🔥 2. CHECK MEMORY CACHE (THIS IS WHERE YOUR LINE GOES)
     if (memoryCache[key] && !options.force) {
       return memoryCache[key];
@@ -884,6 +921,7 @@ async function callAPI(params, options = {}) {
 
   } catch (err) {
     console.error("API ERROR:", err);
+    if (window.PBTRKR_USE_SUPABASE_DATA === true) throw err;
     return null;
   }
 }
@@ -938,8 +976,8 @@ function renderSetsInto(container, data, opts = {}) {
       const isGame3Locked =
         !locked &&
         i === 2 &&
-        game1.includes("-") &&
-        game2.includes("-") &&
+        /^\d+-\d+$/.test(String(game1)) &&
+        /^\d+-\d+$/.test(String(game2)) &&
         (
           (Number(game1.split("-")[0]) > Number(game1.split("-")[1]) &&
            Number(game2.split("-")[0]) > Number(game2.split("-")[1])) ||
@@ -947,13 +985,14 @@ function renderSetsInto(container, data, opts = {}) {
            Number(game2.split("-")[1]) > Number(game2.split("-")[0]))
         );
 
-      if (score && score.includes("-")) {
+      const unresolvedScore = Boolean(score) && !/^\d+-\d+$/.test(String(score));
+      if (score && /^\d+-\d+$/.test(String(score))) {
         const parts = score.split("-");
         a = Number(parts[0]);
         b = Number(parts[1]);
       }
 
-      let result = "tie";
+      let result = unresolvedScore ? "unresolved" : "tie";
       if (Number(a) > Number(b)) result = "win";
       else if (Number(b) > Number(a)) result = "loss";
 
@@ -963,7 +1002,7 @@ function renderSetsInto(container, data, opts = {}) {
       const inputDisabled = locked || isGame3Locked;
 
       const matchCard = `
-        <div class="match-card ${isGame3Locked ? "locked" : ""} ${locked ? "day-locked-card" : ""}" data-set="${match.set}" data-game="${i}">
+        <div class="match-card ${isGame3Locked ? "locked" : ""} ${locked ? "day-locked-card" : ""}" data-set="${match.set}" data-game="${i}" ${unresolvedScore ? `data-raw-score="${escapeHtml(String(score))}"` : ""}>
           <div class="left-content">
             <div class="team-row">
               <span class="team-names">${formatNames(match.teamA)}</span>
@@ -975,7 +1014,11 @@ function renderSetsInto(container, data, opts = {}) {
           </div>
 
           <div class="right-content">
-            <div class="score-editable">
+            ${unresolvedScore ? `
+              <div class="score-unresolved" title="Original score retained exactly; resolve this value before editing it.">
+                ${escapeHtml(String(score))} <span>Unresolved legacy value</span>
+              </div>
+            ` : `<div class="score-editable">
               <input type="number" inputmode="numeric"
                 ${inputDisabled ? "disabled" : ""}
                 value="${a === 0 ? '' : a}" 
@@ -987,7 +1030,7 @@ function renderSetsInto(container, data, opts = {}) {
                 value="${b === 0 ? '' : b}" 
                 oninput="updateScore(${match.set}, ${i}, this)" 
                 onblur="this.blur()">
-            </div>
+            </div>`}
 
             ${isGame3Locked && !locked ? `
               <div style="text-align:right; margin-top:4px;">
@@ -1093,15 +1136,26 @@ async function saveSet(setNumber) {
 
   try {
     const scores = collectSetScoresFromDom(setNumber);
+    const originalSet = (globalData.sets || []).find(set => Number(set.set) === Number(setNumber));
+    const previousScores = Array.isArray(originalSet?.scores) ? originalSet.scores : [];
+    const unresolvedChanged = scores.some((score, index) => {
+      const previous = String(previousScores[index] || "");
+      return previous !== "" && !/^\d+-\d+$/.test(previous) && String(score || "") !== previous;
+    });
+    if (unresolvedChanged) {
+      throw new Error("An unresolved legacy score was changed. Resolve it from the original source before saving.");
+    }
+    const ratingUpdates = window.PBTRKR_USE_SUPABASE_DATA === true
+      ? await buildRatingUpdatesForSet(setNumber, scores)
+      : [];
 
     // 🔥 SEND ONCE
     const res = await callAPI({
       action: "saveSetFull",
       set: setNumber,
-      scores: JSON.stringify(scores)
+      scores: JSON.stringify(scores),
+      ratingUpdates: JSON.stringify(ratingUpdates)
     });
- 
-    await callAPI({ action: "sendSaveNotification" });
 
     console.log("🔥 SAVE RESPONSE:", res);
     // 🚨 RED FLAG
@@ -1112,7 +1166,15 @@ async function saveSet(setNumber) {
       return;
     }
 
-    await processSavedSetRatings(setNumber);
+    try {
+      await callAPI({ action: "sendSaveNotification" });
+    } catch (notificationError) {
+      console.warn("Score saved, but its notification failed:", notificationError);
+      alert("Score saved, but the notification could not be sent.");
+    }
+    if (window.PBTRKR_USE_SUPABASE_DATA !== true) {
+      await processSavedSetRatings(setNumber);
+    }
 
     clearMemoryCache();
     globalData.sets = null;
@@ -1142,9 +1204,34 @@ async function saveSet(setNumber) {
   } catch (e) {
     console.error(e);
     btn.innerText = "Error";
+    alert(e.message || "Unable to save set scores.");
   }
 
   btn.disabled = false;
+}
+
+async function buildRatingUpdatesForSet(setNumber, scores) {
+  if (!Array.isArray(playersCache) || !playersCache.length) await loadPlayers();
+  const existing = (globalData.sets || []).find(set => Number(set.set) === Number(setNumber));
+  if (!existing) return [];
+
+  const proposedSet = { ...existing, scores: scores.map(score => String(score || "").trim()) };
+  const changes = await calculateSetRatings(proposedSet, playersCache);
+  return changes.map(change => {
+    const player = playersCache.find(entry =>
+      normalizePlayerLookupName(entry.name) === normalizePlayerLookupName(change.player_name)
+    );
+    if (!player) return null;
+    return {
+      player_name: player.name,
+      player_key: normalizePlayerLookupName(player.name),
+      expected_dupr: Number(player.DUPR || 0),
+      expected_pw_rank: Number(player.PWRank ?? 50),
+      delta_dupr: Number(change.delta_A || 0),
+      delta_pw_rank: Number(change.delta_B || 0),
+      opponent_avg: Number(change.opponent_avg || 0)
+    };
+  }).filter(Boolean);
 }
 
 async function calculateSetRatings(setData, playersList) {
@@ -1177,7 +1264,7 @@ const teamAAvg = teamAPowers.length
 const teamBAvg = teamBPowers.length
   ? teamBPowers.reduce((a, b) => a + b, 0) / teamBPowers.length
   : null;
-  const validScores = (setData.scores || []).filter(score => score && score.includes("-"));
+  const validScores = (setData.scores || []).filter(score => /^\d+-\d+$/.test(String(score || "").trim()));
   if (!validScores.length || !teamA.length || !teamB.length) {
     console.warn("⚠️ Rating calc skipped due to invalid score/team data:", {
       teamA,
@@ -1208,7 +1295,7 @@ const teamBAvg = teamBPowers.length
   let totalTeamBPoints = 0;
 
   validScores.forEach(score => {
-    if (!score || !score.includes("-")) return;
+    if (!/^\d+-\d+$/.test(String(score || "").trim())) return;
     const [a, b] = score.split("-").map(Number);
     totalTeamAPoints += a;
     totalTeamBPoints += b;
@@ -1314,14 +1401,9 @@ async function ensureCurrentDeviceWhitelisted() {
   const id = deviceId || getOrCreateDeviceId();
 
   try {
-    const { error } = await window.supabaseClient
-      .from("device_whitelist")
-      .upsert([{ device_id: id, timestamp: new Date().toISOString() }], { onConflict: "device_id" });
-
-    if (error) {
-      console.error("❌ Failed to whitelist device:", error);
-      return false;
-    }
+    if (!window.pbtrkrDataService) return false;
+    const authorized = await window.pbtrkrDataService.isDeviceAuthorized(id);
+    if (!authorized) return false;
 
     localStorage.setItem(LS_DEVICE_VERIFIED, "1");
     isEditingLocked = false;
@@ -1330,6 +1412,33 @@ async function ensureCurrentDeviceWhitelisted() {
     console.error("❌ Failed to whitelist device:", err);
     return false;
   }
+}
+
+async function approveCurrentDevice() {
+  if (!window.supabaseClient) return false;
+  const { data: authData, error: authError } = await window.supabaseClient.auth.getSession();
+  if (authError || authData?.session?.user?.app_metadata?.role !== "pbtrkr_admin") {
+    alert("Only a PBTRKR admin can approve devices.");
+    return false;
+  }
+
+  try {
+    if (!window.pbtrkrDataService) {
+      throw new Error("PBTRKR Supabase data service is unavailable");
+    }
+    await window.pbtrkrDataService.authorizeDevice(
+      getOrCreateDeviceId(),
+      authData.session.user.id
+    );
+  } catch (err) {
+    console.error("❌ Device approval failed:", err);
+    alert("Unable to approve this device.");
+    return false;
+  }
+
+  await checkDeviceWhitelist();
+  lockEditingIfNeeded();
+  return !isEditingLocked;
 }
 
 async function getSavedSetData(setNumber) {
@@ -1636,7 +1745,7 @@ if (teamAAvg === null || teamBAvg === null) {
     const scores = getSetScores(set);
     scores.forEach((score, idx) => {
       const key = `${set.set}-${idx}`;
-      if (!score || !score.includes("-")) {
+      if (!/^\d+-\d+$/.test(String(score || "").trim())) {
         // No score yet, generate prediction
         predictions[key] = calculatePredictedScore(teamAAvg, teamBAvg);
       }
@@ -2323,9 +2432,9 @@ async function loadPlayersList() {
       container.innerHTML = `
         <div class="players-access-card">
           <h3>⚠️ Access Required</h3>
-          <p>Enter the access code to view the players list.</p>
-          <input type="password" id="playersAccessCode" class="players-access-input" placeholder="Enter access code" onkeypress="if(event.key==='Enter') verifyPlayersAccessCode()" />
-          <button class="players-access-btn" onclick="verifyPlayersAccessCode()">Unlock</button>
+          <p>Sign in with an approved PBTRKR editor account to view the players list.</p>
+          <input type="email" autocomplete="email" id="playersAccessCode" class="players-access-input" placeholder="Editor email" onkeypress="if(event.key==='Enter') verifyPlayersAccessCode()" />
+          <button class="players-access-btn" onclick="verifyPlayersAccessCode()">Send secure sign-in link</button>
         </div>
       `;
       endTimer("Players List");
@@ -2430,15 +2539,29 @@ async function persistPlayersOrder() {
   if (!updates.length) return;
 
   try {
-    for (const update of updates) {
-      const { error } = await window.supabaseClient
-        .from("players")
-        .update({ order_index: update.order_index })
-        .eq("id", update.id);
-
-      if (error) {
-        console.error("❌ Failed to save players order:", error);
+    if (window.PBTRKR_USE_SUPABASE_DATA === true) {
+      const result = await callAPI({
+        action: "savePlayerOrder",
+        updates: JSON.stringify(updates.map(update => ({
+          player_key: update.id,
+          order_index: update.order_index
+        })))
+      });
+      if (!result || result.error) {
+        console.error("❌ Failed to save players order:", result?.error);
         return;
+      }
+    } else {
+      for (const update of updates) {
+        const { error } = await window.supabaseClient
+          .from("players")
+          .update({ order_index: update.order_index })
+          .eq("id", update.id);
+
+        if (error) {
+          console.error("❌ Failed to save players order:", error);
+          return;
+        }
       }
     }
 
@@ -2554,15 +2677,28 @@ async function savePlayerPhone(playerId, playerName) {
   }
 
   try {
-    const { error } = await window.supabaseClient
-      .from("players")
-      .update({ phone: phoneValue })
-      .eq("id", playerId);
+    if (window.PBTRKR_USE_SUPABASE_DATA === true) {
+      const response = await callAPI({
+        action: "updatePlayerPhone",
+        playerKey: playerId,
+        phone: phoneValue
+      });
+      if (!response || response.error) {
+        console.error("❌ Error saving phone:", response?.error);
+        alert("❌ Failed to save phone number");
+        return;
+      }
+    } else {
+      const { error } = await window.supabaseClient
+        .from("players")
+        .update({ phone: phoneValue })
+        .eq("id", playerId);
 
-    if (error) {
-      console.error("❌ Error saving phone:", error);
-      alert("❌ Failed to save phone number");
-      return;
+      if (error) {
+        console.error("❌ Error saving phone:", error);
+        alert("❌ Failed to save phone number");
+        return;
+      }
     }
 
     console.log("✅ Phone saved for", playerName);
@@ -2581,20 +2717,7 @@ async function savePlayerPhone(playerId, playerName) {
 }
 
 async function verifyPlayersAccessCode() {
-  const codeInput = document.getElementById("playersAccessCode");
-  const code = codeInput?.value?.trim();
-
-  if (code === ACCESS_CODE) {
-    const whitelisted = await ensureCurrentDeviceWhitelisted();
-    if (!whitelisted) {
-      alert("❌ Unable to whitelist this device right now");
-      return;
-    }
-    await loadPlayersList();
-  } else {
-    alert("❌ Incorrect access code");
-    codeInput.value = "";
-  }
+  await verifyAccessCode();
 }
 
 function getPowerRankingForPlayer(name) {
@@ -2953,6 +3076,12 @@ function renderLeaderboard(data) {
 }
 
 async function getHistory() {
+  if (window.PBTRKR_USE_SUPABASE_DATA === true) {
+    const migratedHistory = await callAPI({ action: "getHistory" }, { force: true });
+    historyCache = Array.isArray(migratedHistory) ? migratedHistory : [];
+    return historyCache;
+  }
+
   try {
     const { data, error } = await window.supabaseClient
       .from('history')
@@ -3003,7 +3132,7 @@ function computeTodayStandings(setsData) {
     const teamAraw = (match.teamA || "").split("/").map(s => s.trim()).filter(Boolean);
     const teamBraw = (match.teamB || "").split("/").map(s => s.trim()).filter(Boolean);
     (match.scores || []).forEach(score => {
-      if (!score || !String(score).includes("-")) return;
+      if (!/^\d+-\d+$/.test(String(score || "").trim())) return;
       const parts = String(score).split("-");
       const a = Number(parts[0]);
       const b = Number(parts[1]);
@@ -3128,7 +3257,7 @@ async function finishDay() {
     });
 
     set.scores.forEach(score => {
-      if (!score || !score.includes("-")) return;
+      if (!/^\d+-\d+$/.test(String(score || "").trim())) return;
 
       const [a, b] = score.split("-").map(Number);
 
@@ -3194,30 +3323,32 @@ async function finishDay() {
   // ===== SAVE HISTORY TO SUPABASE =====
   updateDoneProgress(80);
   try {
-    const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
-    for (const player of final) {
-      const trend = after.find(p => p.name.toLowerCase() === player.name.toLowerCase());
-      if (trend) {
-        const { error } = await window.supabaseClient
-          .from('history')
-          .insert([
-            {
-              date: today,
-              player_name: player.name,
-              win_pct: trend.winPct.toString(),
-              points_avg: trend.pointsAvg.toString()
-            }
-          ]);
+    if (window.PBTRKR_USE_SUPABASE_DATA !== true) {
+      const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+      for (const player of final) {
+        const trend = after.find(p => p.name.toLowerCase() === player.name.toLowerCase());
+        if (trend) {
+          const { error } = await window.supabaseClient
+            .from('history')
+            .insert([
+              {
+                date: today,
+                player_name: player.name,
+                win_pct: trend.winPct.toString(),
+                points_avg: trend.pointsAvg.toString()
+              }
+            ]);
 
-        if (error) {
-          console.error("❌ Failed to save history row to Supabase:", {
-            player: player.name,
-            error
-          });
+          if (error) {
+            console.error("❌ Failed to save history row to Supabase:", {
+              player: player.name,
+              error
+            });
+          }
         }
       }
+      console.log("✅ History saved to Supabase");
     }
-    console.log("✅ History saved to Supabase");
   } catch (err) {
     console.error("❌ Failed to save history to Supabase:", err);
   }
@@ -3232,15 +3363,50 @@ async function finishDay() {
     final
   });
 
-  const shareId = generateShareId();
+  let shareId = generateShareId();
   localStorage.setItem("results_" + shareId, JSON.stringify(final));
 
   // 🔥 ADD THIS (CRITICAL)
-  await callAPI({
-    action: "saveSharedResult",
-    resultId: shareId,
-    data: JSON.stringify(final)
-  });
+  let completionResult;
+  if (window.PBTRKR_USE_SUPABASE_DATA === true) {
+    const historyRows = final.map(player => {
+      const trend = after.find(entry => entry.name.toLowerCase() === player.name.toLowerCase());
+      return trend ? {
+        player_name: player.name,
+        win_pct: String(trend.winPct),
+        points_avg: String(trend.pointsAvg)
+      } : null;
+    }).filter(Boolean);
+    completionResult = await callAPI({
+      action: "completeDay",
+      date: window.pbtrkrDataService.todayIso(),
+      resultId: shareId,
+      data: JSON.stringify(final),
+      historyRows: JSON.stringify(historyRows)
+    });
+  } else {
+    completionResult = await callAPI({
+      action: "saveSharedResult",
+      resultId: shareId,
+      data: JSON.stringify(final)
+    });
+  }
+
+  if (!completionResult || completionResult.error) {
+    setDayComplete(false);
+    localStorage.removeItem("results_" + shareId);
+    localStorage.removeItem(`pbTracker_results_${todayKey()}`);
+    updateDoneUiVisibility();
+    alert("Day results could not be saved. The day remains open; please retry.");
+    if (loadingBar) loadingBar.style.display = "none";
+    return;
+  }
+
+  if (completionResult.resultId && completionResult.resultId !== shareId) {
+    localStorage.removeItem("results_" + shareId);
+    shareId = completionResult.resultId;
+    localStorage.setItem("results_" + shareId, JSON.stringify(final));
+  }
 
   updateDoneProgress(95);
   localStorage.setItem(`pbTracker_results_${todayKey()}`, buildResultsHtml(
@@ -3298,9 +3464,9 @@ async function loadSharedResults() {
       resultId: shareId
     });
 
-    if (!res || !res.length) return false;
-
-    renderResults(res);
+    if (!res || (Array.isArray(res) && !res.length)) return false;
+    const parsed = typeof res === "string" ? JSON.parse(res) : res;
+    renderResults(Array.isArray(parsed) ? parsed : parsed?.results || []);
     return true;
   }
 
@@ -3746,7 +3912,7 @@ function countGamesPlayedInSets(sets, player) {
     const teamA = (set.teamA || "").toLowerCase().split("/").map(s => s.trim());
     const teamB = (set.teamB || "").toLowerCase().split("/").map(s => s.trim());
     (set.scores || []).forEach(score => {
-      if (!score || !String(score).includes("-")) return;
+      if (!/^\d+-\d+$/.test(String(score || "").trim())) return;
       if (teamA.includes(pl) || teamB.includes(pl)) n++;
     });
   });
@@ -4260,7 +4426,7 @@ function buildPlayerStats(history) {
     const date = match.date;
 
     match.scores.forEach(score => {
-      if (!score || !score.includes("-")) return;
+      if (!/^\d+-\d+$/.test(String(score || "").trim())) return;
 
       const [a, b] = score.split("-").map(Number);
       if (isNaN(a) || isNaN(b)) return;
@@ -4431,7 +4597,7 @@ function getBestPartner(sets, player) {
     const allGames = set.scores || [];
 
     allGames.forEach(score => {
-      if (!score.includes("-")) return;
+      if (!/^\d+-\d+$/.test(String(score || "").trim())) return;
 
       const [a,b] = score.split("-").map(Number);
       const winnerA = a > b;
@@ -4496,7 +4662,7 @@ function calculateBiteStrength(playerName, sets, trendData) {
     const oppTeam = isPlayerA ? teamB : teamA;
     
     (set.scores || []).forEach(score => {
-      if (!score || !String(score).includes("-")) return;
+      if (!/^\d+-\d+$/.test(String(score || "").trim())) return;
       
       const [aScore, bScore] = score.split("-").map(Number);
       const isWin = (isPlayerA && aScore > bScore) || (isPlayerB && bScore > aScore);
@@ -4555,7 +4721,7 @@ function analyzePlayerFromSets(sets, player) {
       setDate && !isNaN(setDate.getTime()) ? setDate.getDay() : null;
 
     (set.scores || []).forEach(score => {
-      if (!score || !score.includes("-")) return;
+      if (!/^\d+-\d+$/.test(String(score || "").trim())) return;
 
       const [a, b] = score.split("-").map(Number);
       const winnerA = a > b;

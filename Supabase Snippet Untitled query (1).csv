@@ -1,0 +1,42 @@
+table_name,constraint_name,constraint_type,column_name,referenced_table,referenced_column,check_clause
+clinic_events,2200_25848_10_not_null,CHECK,null,null,null,is_full IS NOT NULL
+clinic_events,2200_25848_11_not_null,CHECK,null,null,null,status IS NOT NULL
+clinic_events,2200_25848_12_not_null,CHECK,null,null,null,created_at IS NOT NULL
+clinic_events,2200_25848_13_not_null,CHECK,null,null,null,updated_at IS NOT NULL
+clinic_events,2200_25848_1_not_null,CHECK,null,null,null,id IS NOT NULL
+clinic_events,2200_25848_2_not_null,CHECK,null,null,null,event_name IS NOT NULL
+clinic_events,2200_25848_3_not_null,CHECK,null,null,null,event_date IS NOT NULL
+clinic_events,2200_25848_4_not_null,CHECK,null,null,null,start_time IS NOT NULL
+clinic_events,2200_25848_5_not_null,CHECK,null,null,null,end_time IS NOT NULL
+clinic_events,2200_25848_6_not_null,CHECK,null,null,null,description IS NOT NULL
+clinic_events,2200_25848_7_not_null,CHECK,null,null,null,player_capacity IS NOT NULL
+clinic_events,2200_25848_8_not_null,CHECK,null,null,null,location IS NOT NULL
+clinic_events,2200_25848_9_not_null,CHECK,null,null,null,address IS NOT NULL
+clinic_events,clinic_events_pkey,PRIMARY KEY,id,clinic_events,id,null
+clinic_events,clinic_events_player_capacity_check,CHECK,null,clinic_events,player_capacity,(player_capacity > 0)
+clinic_events,clinic_events_status_check,CHECK,null,clinic_events,status,"(status = ANY (ARRAY['draft'::text, 'published'::text]))"
+clinic_events,clinic_events_time_check,CHECK,null,clinic_events,end_time,(end_time > start_time)
+clinic_events,clinic_events_time_check,CHECK,null,clinic_events,start_time,(end_time > start_time)
+device_whitelist,2200_17747_1_not_null,CHECK,null,null,null,device_id IS NOT NULL
+device_whitelist,2200_17747_2_not_null,CHECK,null,null,null,timestamp IS NOT NULL
+device_whitelist,device_whitelist_pkey,PRIMARY KEY,device_id,device_whitelist,device_id,null
+events,2200_17817_1_not_null,CHECK,null,null,null,id IS NOT NULL
+events,events_pkey,PRIMARY KEY,id,events,id,null
+history,2200_17686_1_not_null,CHECK,null,null,null,id IS NOT NULL
+history,2200_17686_2_not_null,CHECK,null,null,null,Date IS NOT NULL
+history,history_pkey,PRIMARY KEY,id,history,id,null
+match_rating_logs,2200_17840_1_not_null,CHECK,null,null,null,id IS NOT NULL
+match_rating_logs,match_rating_logs_pkey,PRIMARY KEY,id,match_rating_logs,id,null
+players,2200_17805_1_not_null,CHECK,null,null,null,id IS NOT NULL
+players,2200_17805_2_not_null,CHECK,null,null,null,name IS NOT NULL
+players,players_pkey,PRIMARY KEY,id,players,id,null
+rating_history,2200_17826_1_not_null,CHECK,null,null,null,id IS NOT NULL
+rating_history,rating_history_event_id_fkey,FOREIGN KEY,event_id,events,id,null
+rating_history,rating_history_pkey,PRIMARY KEY,id,rating_history,id,null
+rating_history,unique_event_player,UNIQUE,player_name,rating_history,event_name,null
+rating_history,unique_event_player,UNIQUE,player_name,rating_history,player_name,null
+rating_history,unique_event_player,UNIQUE,event_name,rating_history,event_name,null
+rating_history,unique_event_player,UNIQUE,event_name,rating_history,player_name,null
+visitors,2200_17544_1_not_null,CHECK,null,null,null,id IS NOT NULL
+visitors,visitors_clinic_event_id_fkey,FOREIGN KEY,clinic_event_id,clinic_events,id,null
+visitors,visitors_pkey,PRIMARY KEY,id,visitors,id,null

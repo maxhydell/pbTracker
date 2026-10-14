@@ -1,0 +1,16 @@
+schema_name,table_name,rls_enabled,rls_forced
+public,clinic_events,true,false
+public,device_whitelist,true,false
+public,events,true,false
+public,history,true,false
+public,legacy_history_stage,true,false
+public,legacy_rankings_stage,true,false
+public,legacy_schedule_stage,true,false
+public,legacy_sets_stage,true,false
+public,legacy_shared_results_stage,true,false
+public,legacy_sorted_rankings_stage,true,false
+public,legacy_telegram_log_stage,true,false
+public,match_rating_logs,true,false
+public,players,true,false
+public,rating_history,true,false
+public,visitors,true,false

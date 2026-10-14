@@ -1,0 +1,16 @@
+table_name,row_count
+clinic_events,2
+device_whitelist,10
+events,0
+history,4
+legacy_history_stage,316
+legacy_rankings_stage,26
+legacy_schedule_stage,189
+legacy_sets_stage,408
+legacy_shared_results_stage,74
+legacy_sorted_rankings_stage,26
+legacy_telegram_log_stage,729
+match_rating_logs,744
+players,26
+rating_history,744
+visitors,856

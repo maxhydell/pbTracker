@@ -1,0 +1,43 @@
+schemaname,tablename,policyname,permissive,roles,cmd,qual,with_check
+public,clinic_events,Anyone can read published clinic events,PERMISSIVE,"{anon,authenticated}",SELECT,(status = 'published'::text),null
+public,clinic_events,Clinic admins can create clinic events,PERMISSIVE,{authenticated},INSERT,null,(( SELECT ((auth.jwt() -> 'app_metadata'::text) ->> 'role'::text)) = 'clinic_admin'::text)
+public,clinic_events,Clinic admins can read all clinic events,PERMISSIVE,{authenticated},SELECT,(( SELECT ((auth.jwt() -> 'app_metadata'::text) ->> 'role'::text)) = 'clinic_admin'::text),null
+public,clinic_events,Clinic admins can update clinic events,PERMISSIVE,{authenticated},UPDATE,(( SELECT ((auth.jwt() -> 'app_metadata'::text) ->> 'role'::text)) = 'clinic_admin'::text),(( SELECT ((auth.jwt() -> 'app_metadata'::text) ->> 'role'::text)) = 'clinic_admin'::text)
+public,clinic_events,Public can view published clinic events,PERMISSIVE,"{anon,authenticated}",SELECT,(status = 'published'::text),null
+public,device_whitelist,Allow insert whitelist,PERMISSIVE,{public},INSERT,null,true
+public,device_whitelist,Allow select whitelist,PERMISSIVE,{public},SELECT,true,null
+public,device_whitelist,device_whitelist_delete,PERMISSIVE,{public},DELETE,true,null
+public,device_whitelist,device_whitelist_insert,PERMISSIVE,{public},INSERT,null,true
+public,device_whitelist,device_whitelist_read,PERMISSIVE,{public},SELECT,true,null
+public,device_whitelist,device_whitelist_update,PERMISSIVE,{public},UPDATE,true,null
+public,events,events_delete,PERMISSIVE,{public},DELETE,true,null
+public,events,events_insert,PERMISSIVE,{public},INSERT,null,true
+public,events,events_read,PERMISSIVE,{public},SELECT,true,null
+public,events,events_update,PERMISSIVE,{public},UPDATE,true,null
+public,history,history_delete,PERMISSIVE,{public},DELETE,true,null
+public,history,history_insert,PERMISSIVE,{public},INSERT,null,true
+public,history,history_read,PERMISSIVE,{public},SELECT,true,null
+public,history,history_update,PERMISSIVE,{public},UPDATE,true,null
+public,match_rating_logs,match_logs_delete,PERMISSIVE,{public},DELETE,true,null
+public,match_rating_logs,match_logs_insert,PERMISSIVE,{public},INSERT,null,true
+public,match_rating_logs,match_logs_read,PERMISSIVE,{public},SELECT,true,null
+public,match_rating_logs,match_logs_update,PERMISSIVE,{public},UPDATE,true,null
+public,players,players_delete,PERMISSIVE,{public},DELETE,true,null
+public,players,players_insert,PERMISSIVE,{public},INSERT,null,true
+public,players,players_read,PERMISSIVE,{public},SELECT,true,null
+public,players,players_update,PERMISSIVE,{public},UPDATE,true,null
+public,rating_history,rating_history_delete,PERMISSIVE,{public},DELETE,true,null
+public,rating_history,rating_history_insert,PERMISSIVE,{public},INSERT,null,true
+public,rating_history,rating_history_read,PERMISSIVE,{public},SELECT,true,null
+public,rating_history,rating_history_update,PERMISSIVE,{public},UPDATE,true,null
+public,visitors,Allow public insert,PERMISSIVE,{public},INSERT,null,true
+public,visitors,Allow public read,PERMISSIVE,{public},SELECT,true,null
+public,visitors,Clinic admins can read visitor analytics,PERMISSIVE,{authenticated},SELECT,(( SELECT ((auth.jwt() -> 'app_metadata'::text) ->> 'role'::text)) = 'clinic_admin'::text),null
+public,visitors,PBTRKR visitor reads require clinic admin,RESTRICTIVE,{public},SELECT,(( SELECT ((auth.jwt() -> 'app_metadata'::text) ->> 'role'::text)) = 'clinic_admin'::text),null
+public,visitors,PBTRKR visitor tracking inserts,PERMISSIVE,"{anon,authenticated}",INSERT,null,"((clinic_event_id IS NULL) OR (EXISTS ( SELECT 1
+   FROM clinic_events clinic_event
+  WHERE ((clinic_event.id = visitors.clinic_event_id) AND (clinic_event.status = 'published'::text)))))"
+public,visitors,visitors_delete,PERMISSIVE,{public},DELETE,true,null
+public,visitors,visitors_insert,PERMISSIVE,{public},INSERT,null,true
+public,visitors,visitors_read,PERMISSIVE,{public},SELECT,true,null
+public,visitors,visitors_update,PERMISSIVE,{public},UPDATE,true,null
