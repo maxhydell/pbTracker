@@ -1112,8 +1112,10 @@ async function loadTodaySetsAll() {
   updateDoneUiVisibility();
 
   // Add predicted scores as placeholders after rendering
-  setTimeout(async () => {
-    await addPredictedScorePlaceholders(data);
+  setTimeout(() => {
+    addPredictedScorePlaceholders(data).catch(error => {
+      console.warn("Score placeholders are unavailable:", error);
+    });
   }, 100);
 }
 
@@ -1121,8 +1123,8 @@ async function addPredictedScorePlaceholders(setsData) {
   if (!Array.isArray(setsData) || !playersCache || !playersCache.length) return;
   
   const predictions = await getPredictedScoresForDay(setsData);
-  
-  Object.entries(predictions).forEach(([key, predicted]) => {
+
+  window.PBTRKRPredictions.entries(predictions).forEach(([key, predicted]) => {
     const [setNum, gameIdx] = key.split("-").map(Number);
     const aInput = document.querySelector(`.match-card[data-set="${setNum}"][data-game="${gameIdx}"] input:first-of-type`);
     const bInput = document.querySelector(`.match-card[data-set="${setNum}"][data-game="${gameIdx}"] input:last-of-type`);
@@ -1528,6 +1530,16 @@ async function approveCurrentDevice() {
 
   await checkDeviceWhitelist();
   lockEditingIfNeeded();
+  if (!isEditingLocked) {
+    try {
+      await loadPlayers();
+      if (document.getElementById("players")?.classList.contains("active")) {
+        await loadPlayersList();
+      }
+    } catch (refreshError) {
+      console.warn("Device approved, but protected player data could not be refreshed:", refreshError);
+    }
+  }
   return !isEditingLocked;
 }
 
@@ -1829,7 +1841,7 @@ const teamBAvg = teamBPowers.length
   : null;
 
 if (teamAAvg === null || teamBAvg === null) {
-  return; // skip prediction if missing data
+  continue;
 }
 
     const scores = getSetScores(set);
