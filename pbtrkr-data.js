@@ -11,6 +11,15 @@
     setItem: () => undefined,
     removeItem: () => undefined
   });
+  const ADMIN_ROLES = new Set(["pbtrkr_admin", "clinic_admin"]);
+
+  function isAdminRole(role) {
+    return ADMIN_ROLES.has(role);
+  }
+
+  function isEditorRole(role) {
+    return role === "pbtrkr_editor" || isAdminRole(role);
+  }
   const DAY_FORMATTER = new Intl.DateTimeFormat("en-CA", {
     timeZone: "America/New_York",
     year: "numeric",
@@ -203,11 +212,11 @@
 
     const { data: sessionData } = await db.auth.getSession();
     const role = sessionData?.session?.user?.app_metadata?.role;
-    if (["pbtrkr_editor", "pbtrkr_admin"].includes(role)) {
+    if (isEditorRole(role)) {
       const { data: phoneRows, error: phoneError } = await db.rpc("pbtrkr_get_player_phones", {
         p_device_id: deviceId()
       });
-      if (phoneError) throw phoneError;
+      if (phoneError && phoneError.code !== "42501") throw phoneError;
       const phoneByKey = new Map((phoneRows || []).map(row => [row.player_key, row.phone]));
         return (data || [])
           .filter(row => String(row.player_name || "").trim() !== "")
@@ -256,7 +265,7 @@
     if (isoDate === todayIso()) {
       const { data: authData } = await db.auth.getSession();
       const role = authData?.session?.user?.app_metadata?.role;
-      if (["pbtrkr_editor", "pbtrkr_admin"].includes(role)) {
+      if (isEditorRole(role)) {
         const { error: ensureError } = await db.rpc("pbtrkr_ensure_today_sets", {
           p_match_date: isoDate,
           p_device_id: deviceId()
@@ -418,7 +427,7 @@
         const { data: authData, error } = await client().auth.getSession();
         if (error) throw error;
         const role = authData?.session?.user?.app_metadata?.role;
-        if (!["pbtrkr_editor", "pbtrkr_admin"].includes(role)) {
+        if (!isEditorRole(role)) {
           return { success: true, created: false, reason: "read_only" };
         }
         return rpc("pbtrkr_ensure_week_initialized", {
@@ -592,6 +601,8 @@
     legacyDate,
     dayWindow,
     getPlayers,
+    isAdminRole,
+    isEditorRole,
     getCanonicalPlayerKey,
     reconcileSetSave,
     getSchedule,
