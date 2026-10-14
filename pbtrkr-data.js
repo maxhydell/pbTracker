@@ -98,6 +98,7 @@
   function toLegacyPlayer(row) {
     return {
       id: row.player_key,
+      playerKey: row.player_key,
       name: row.player_name,
       rating: row.rating,
       DUPR: row.dupr,
@@ -116,9 +117,42 @@
     };
   }
 
+  function mergeSupabasePlayerRows(players, directoryRows) {
+    const normalizedName = value => String(value || "").trim().replace(/\s+/g, " ").toLowerCase();
+    const directory = new Map();
+    for (const row of directoryRows || []) {
+      const name = normalizedName(row?.name);
+      if (name) directory.set(name, row);
+    }
+
+    const missing = [];
+    const merged = (players || [])
+      .filter(player => normalizedName(player?.name) !== "")
+      .map(player => {
+        const row = directory.get(normalizedName(player.name));
+        if (!row) {
+          missing.push(player.name);
+          return player;
+        }
+        return {
+          ...player,
+          id: row.id,
+          DUPR: row.DUPR,
+          PWRank: row.PWRank,
+          phone: row.phone ?? "",
+          order_index: row.order_index
+        };
+      });
+
+    return { players: merged, missing };
+  }
+
   function toLegacySet(row) {
     return {
       id: row.id,
+      matchDate: row.match_date,
+      setNumber: row.set_number,
+      persisted: true,
       date: row.date_raw || (row.match_date ? legacyDate(row.match_date) : ""),
       set: Number(row.set_number) || row.set_number,
       teamA: row.team_a || "",
@@ -175,9 +209,11 @@
       });
       if (phoneError) throw phoneError;
       const phoneByKey = new Map((phoneRows || []).map(row => [row.player_key, row.phone]));
-      return (data || []).map(row => ({ ...toLegacyPlayer(row), phone: phoneByKey.get(row.player_key) || "" }));
+        return (data || [])
+          .filter(row => String(row.player_name || "").trim() !== "")
+          .map(row => ({ ...toLegacyPlayer(row), phone: phoneByKey.get(row.player_key) || "" }));
     }
-    return (data || []).map(toLegacyPlayer);
+      return (data || []).filter(row => String(row.player_name || "").trim() !== "").map(toLegacyPlayer);
   }
 
   async function getCanonicalPlayerKey(name) {
@@ -278,10 +314,59 @@
     return timestamps[timestamps.length - 1] || null;
   }
 
-  async function rpc(name, args) {
-    const { data, error } = await client().rpc(name, args);
+  async function rpc(name, args, options = {}) {
+    const response = await awaitSupabaseRequest(
+      client().rpc(name, args), options.timeoutMs, "PBTRKR_SAVE_TIMEOUT"
+    );
+    const { data, error } = response;
     if (error) throw error;
     return data;
+  }
+
+  async function awaitSupabaseRequest(query, timeoutMs, errorCode) {
+    if (!timeoutMs) return query;
+    const controller = new AbortController();
+    const request = typeof query.abortSignal === "function"
+      ? query.abortSignal(controller.signal)
+      : query;
+    let timeoutId;
+    try {
+      return await Promise.race([
+        Promise.resolve(request),
+        new Promise((resolve, reject) => {
+          timeoutId = setTimeout(() => {
+            const timeoutError = new Error(`Supabase request timed out after ${timeoutMs}ms`);
+            timeoutError.code = errorCode;
+            controller.abort();
+            reject(timeoutError);
+          }, timeoutMs);
+        })
+      ]);
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  function normalizedScores(scores) {
+    return (scores || []).map(value => String(value ?? ""));
+  }
+
+  async function reconcileSetSave(matchDate, setNumber, expectedScores) {
+    const response = await awaitSupabaseRequest(client().from("pbtrkr_sets")
+      .select("id,match_date,set_number,game_scores")
+      .eq("match_date", matchDate)
+      .eq("set_number", String(setNumber))
+      .limit(1), 8000, "PBTRKR_RECONCILE_TIMEOUT");
+    const { data, error } = response;
+    if (error) throw error;
+    const current = data?.[0] || null;
+    const persistedScores = normalizedScores(current?.game_scores);
+    const requestedScores = normalizedScores(expectedScores);
+    return {
+      matches: Boolean(current) && JSON.stringify(persistedScores) === JSON.stringify(requestedScores),
+      set: current,
+      persistedScores
+    };
   }
 
   async function isDeviceAuthorized(id = deviceId()) {
@@ -313,7 +398,7 @@
     return [{ field: `s${slot}`, value: status }];
   }
 
-  async function call(params) {
+  async function call(params, options = {}) {
     const action = params.action;
     switch (action) {
       case "getAllData": {
@@ -356,17 +441,46 @@
       case "lastUpdated":
         return getLastUpdated();
       case "saveSetFull": {
-        const ratingUpdates = JSON.parse(params.ratingUpdates || "[]");
-        for (const update of ratingUpdates) {
-      update.player_key = await getCanonicalPlayerKey(update.player_name || update.player_key);
-        }
-        return rpc("pbtrkr_save_set_full", {
-          p_match_date: todayIso(),
-          p_set_number: String(params.set),
-          p_scores: JSON.parse(params.scores || "[]"),
+        const ratingUpdates = JSON.parse(params.ratingUpdates || "[]").map(update => ({
+          ...update,
+          player_key: update.player_key || String(update.player_name || "").trim().toLowerCase()
+        }));
+        const matchDate = todayIso();
+        const setNumber = String(params.set);
+        const scores = JSON.parse(params.scores || "[]");
+        const rpcArgs = {
+          p_match_date: matchDate,
+          p_set_number: setNumber,
+          p_scores: scores,
           p_rating_updates: ratingUpdates,
           p_device_id: deviceId()
-        });
+        };
+        try {
+          return await rpc("pbtrkr_save_set_full", rpcArgs, {
+            timeoutMs: options.timeoutMs ?? 15000
+          });
+        } catch (error) {
+          if (error.code !== "PBTRKR_SAVE_TIMEOUT") throw error;
+          try {
+            const reconciliation = await reconcileSetSave(matchDate, setNumber, scores);
+            if (reconciliation.matches) {
+              return {
+                success: true,
+                reconciled: true,
+                set_id: reconciliation.set.id,
+                scores: reconciliation.persistedScores
+              };
+            }
+          } catch (reconciliationError) {
+            error.reconciliationError = reconciliationError;
+          }
+          const uncertainError = new Error(
+            "The score save timed out and its commit status could not be confirmed. Verify the saved score before retrying."
+          );
+          uncertainError.code = "PBTRKR_SAVE_OUTCOME_UNKNOWN";
+          uncertainError.cause = error;
+          throw uncertainError;
+        }
       }
       case "updateSchedulePartial": {
         const changes = JSON.parse(params.changes || "[]");
@@ -479,6 +593,7 @@
     dayWindow,
     getPlayers,
     getCanonicalPlayerKey,
+    reconcileSetSave,
     getSchedule,
     getSets,
     getAllSets,
@@ -491,6 +606,7 @@
     saveSchedule,
     toLegacyPlayer,
     toLegacySet,
+    mergeSupabasePlayerRows,
     num,
     toPercent
   };

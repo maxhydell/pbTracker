@@ -40,6 +40,7 @@ let pendingScheduleChanges = [];
 let touchStartY = 0;
 let holdTimer;
 let optimisticUpdates = {};
+const scoreSaveStates = window.PBTRKRScoreState.create();
 let globalData = {
   sets: null,
   trend: null,
@@ -134,6 +135,27 @@ function collectSetScoresFromDom(setNumber) {
 
     return `${a}-${b}`;
   });
+}
+
+function validateSetScoreInputs(setNumber) {
+  const activePage = document.querySelector(".page.active");
+  const cards = activePage
+    ? Array.from(activePage.querySelectorAll(`.match-card[data-set="${setNumber}"]`))
+    : Array.from(document.querySelectorAll(`.match-card[data-set="${setNumber}"]`));
+
+  for (const card of cards) {
+    if (card.hasAttribute("data-raw-score")) continue;
+    const inputs = card.querySelectorAll(".score-editable input");
+    if (inputs.length < 2) continue;
+    const left = String(inputs[0].value || "").trim();
+    const right = String(inputs[1].value || "").trim();
+    if ((left === "") !== (right === "")) {
+      throw new Error("Enter both sides of a game score, or clear both sides.");
+    }
+    if (left !== "" && (!/^\d+$/.test(left) || !/^\d+$/.test(right))) {
+      throw new Error("Enter each score as two whole numbers, such as 11-8.");
+    }
+  }
 }
 
 function getOrCreateDeviceId() {
@@ -743,7 +765,10 @@ function normalizePlayerLookupName(name) {
 }
 
 async function loadPlayers() {
-  playersCache = await callAPI({ action: "getPlayers" });
+  const loadedPlayers = await callAPI({ action: "getPlayers" });
+  playersCache = Array.isArray(loadedPlayers)
+    ? loadedPlayers.filter(player => normalizePlayerLookupName(player?.name) !== "")
+    : [];
   
   // Augment with Supabase data only when the Supabase path is active.
   if (window.PBTRKR_USE_SUPABASE_DATA === true && window.supabaseClient && Array.isArray(playersCache)) {
@@ -756,34 +781,15 @@ async function loadPlayers() {
         console.log("SUPABASE PLAYERS:", supabasePlayerData);
 
       if (!error && supabasePlayerData) {
-        // Merge Supabase data into playersCache
-        const supabaseMap = {};
-        supabasePlayerData.forEach(p => {
-          const normalizedName = normalizePlayerLookupName(p.name);
-          supabaseMap[normalizedName] = {
-            id: p.id,
-            DUPR: p.DUPR,
-            PWRank: p.PWRank,
-            phone: p.phone,
-            order_index: p.order_index
-          };
-        });
-
-        playersCache.forEach(p => {
-          const normalizedName = normalizePlayerLookupName(p.name);
-          const supabaseData = supabaseMap[normalizedName];
-          if (supabaseData) {
-            p.id = supabaseData.id;
-            p.DUPR = supabaseData.DUPR;
-            p.PWRank = supabaseData.PWRank;
-            p.phone = supabaseData.phone ?? "";
-            p.order_index = supabaseData.order_index;
-          } else {
-            console.warn("⚠️ Missing Supabase player match during loadPlayers:", {
-              playerName: p.name,
-              normalizedName
-            });
-          }
+        const merged = window.pbtrkrDataService.mergeSupabasePlayerRows(
+          playersCache, supabasePlayerData
+        );
+        playersCache = merged.players;
+        merged.missing.forEach(playerName => {
+          console.warn("⚠️ Missing Supabase player match during loadPlayers:", {
+            playerName,
+            normalizedName: normalizePlayerLookupName(playerName)
+          });
         });
 
         const missingSupabaseIds = playersCache
@@ -967,7 +973,9 @@ function renderSetsInto(container, data, opts = {}) {
     games.forEach((scoreEntry, i) => {
       const key = `${match.set}-${i}`;
       const score = optimisticUpdates[key] ?? scoreEntry ?? "0-0";
-      const isDirty = optimisticUpdates[key] !== undefined;
+      const saveState = scoreSaveStates.initialize(
+        match.set, i, scoreEntry, match.persisted === true
+      );
       let a = 0, b = 0;
 
       const game1 = games[0] || "";
@@ -1041,7 +1049,11 @@ function renderSetsInto(container, data, opts = {}) {
             ` : ""}
 
             <div class="meta-row">
-              ${!isDirty ? "" : `<span class="unsaved-dot"></span>`}
+              <span class="score-save-state ${saveState.status}"
+                data-score-state="${saveState.status}"
+                role="img"
+                aria-label="${scoreStateLabel(saveState.status)}"
+                title="${scoreStateLabel(saveState.status)}"></span>
               <div class="meta-info">Game ${i+1} • Set ${match.set}</div>
             </div>
             <div id="status-${match.set}-${i}"></div>
@@ -1053,6 +1065,29 @@ function renderSetsInto(container, data, opts = {}) {
 
     container.appendChild(setWrapper);
   });
+}
+
+function scoreStateLabel(status) {
+  const labels = {
+    saved: "Saved to Supabase",
+    unsaved: "Unsaved score changes",
+    saving: "Saving score",
+    error: "Save failed; score is not confirmed",
+    unknown: "Save outcome is unknown; verify before retrying"
+  };
+  return labels[status] || labels.unsaved;
+}
+
+function updateScoreSaveIndicator(setNumber, gameIndex) {
+  const status = scoreSaveStates.get(setNumber, gameIndex).status;
+  const indicator = document.querySelector(
+    `.match-card[data-set="${setNumber}"][data-game="${gameIndex}"] .score-save-state`
+  );
+  if (!indicator) return;
+  indicator.className = `score-save-state ${status}`;
+  indicator.dataset.scoreState = status;
+  indicator.setAttribute("aria-label", scoreStateLabel(status));
+  indicator.title = scoreStateLabel(status);
 }
 
 async function loadTodaySetsAll() {
@@ -1130,26 +1165,46 @@ async function saveSet(setNumber) {
   
   const btn = document.getElementById(`save-btn-${setNumber}`);
   if (!btn) return;
-
-  btn.innerText = "Saving...";
-  btn.disabled = true;
-
+  if (!scoreSaveStates.tryBeginSave(setNumber)) return;
+  let saveSnapshot = [];
   try {
+    validateSetScoreInputs(setNumber);
     const scores = collectSetScoresFromDom(setNumber);
     const originalSet = (globalData.sets || []).find(set => Number(set.set) === Number(setNumber));
     const previousScores = Array.isArray(originalSet?.scores) ? originalSet.scores : [];
-    const unresolvedChanged = scores.some((score, index) => {
+    for (let index = 0; index < scores.length; index += 1) {
+      const score = String(scores[index] || "");
       const previous = String(previousScores[index] || "");
-      return previous !== "" && !/^\d+-\d+$/.test(previous) && String(score || "") !== previous;
-    });
-    if (unresolvedChanged) {
-      throw new Error("An unresolved legacy score was changed. Resolve it from the original source before saving.");
+      if (previous !== "" && !/^\d+-\d+$/.test(previous) && score !== previous) {
+        throw new Error("An unresolved legacy score was changed. Resolve it from the original source before saving.");
+      }
+      if (score !== "" && !/^\d+-\d+$/.test(score) && score !== previous) {
+        throw new Error("Enter each score as two whole numbers, such as 11-8.");
+      }
     }
+
+    btn.innerText = "Saving...";
+    btn.disabled = true;
+    saveSnapshot = scoreSaveStates.snapshot(setNumber, scores);
+    if (scoreSaveStates.hasUnknown(setNumber, scores.length)) {
+      const reconciliation = await window.pbtrkrDataService.reconcileSetSave(
+        window.pbtrkrDataService.todayIso(), String(setNumber), scores
+      );
+      if (reconciliation.matches) {
+        scoreSaveStates.markSaved(saveSnapshot);
+        applyCommittedSetScores(setNumber, scores, saveSnapshot);
+        updateSetSaveIndicators(setNumber, scores.length);
+        return;
+      }
+    }
+
+    scoreSaveStates.markSaving(saveSnapshot);
+    saveSnapshot.forEach(item => updateScoreSaveIndicator(setNumber, item.gameIndex));
+
     const ratingUpdates = window.PBTRKR_USE_SUPABASE_DATA === true
       ? await buildRatingUpdatesForSet(setNumber, scores)
       : [];
 
-    // 🔥 SEND ONCE
     const res = await callAPI({
       action: "saveSetFull",
       set: setNumber,
@@ -1157,57 +1212,91 @@ async function saveSet(setNumber) {
       ratingUpdates: JSON.stringify(ratingUpdates)
     });
 
-    console.log("🔥 SAVE RESPONSE:", res);
-    // 🚨 RED FLAG
-    if (res?.error) {
-      btn.innerText = "Error";
-      alert("🚨 Save blocked: ranking mismatch");
-      btn.disabled = false;
-      return;
+    if (window.PBTRKR_USE_SUPABASE_DATA === true && res?.success !== true) {
+      throw new Error(res?.message || "Supabase did not confirm the score save.");
     }
 
-    try {
-      await callAPI({ action: "sendSaveNotification" });
-    } catch (notificationError) {
-      console.warn("Score saved, but its notification failed:", notificationError);
-      alert("Score saved, but the notification could not be sent.");
-    }
+    scoreSaveStates.markSaved(saveSnapshot);
+    applyCommittedSetScores(setNumber, scores, saveSnapshot, ratingUpdates);
+    updateSetSaveIndicators(setNumber, scores.length);
+    scoreSaveStateBackgroundNotification();
+    scoreSaveStateBackgroundRefresh();
+
     if (window.PBTRKR_USE_SUPABASE_DATA !== true) {
       await processSavedSetRatings(setNumber);
+      clearMemoryCache();
+      globalData.sets = null;
+      await loadTodaySetsAll();
     }
-
-    clearMemoryCache();
-    globalData.sets = null;
-    globalData.trend = null;
-    historyCache = [];
-
-    await loadTodaySetsAll();
-    await loadRankings();
-    if (document.getElementById("players")?.classList.contains("active")) {
-      await loadPlayersList();
-    }
-    if (globalData.schedule || document.getElementById("schedule")?.classList.contains("active")) {
-      loadSchedule();
-    }
-
-    // 🔥 re-apply AFTER DOM rebuild
-    setTimeout(() => {
-      const btnAfter = document.getElementById(`save-btn-${setNumber}`);
-      if (btnAfter) {
-        btnAfter.innerText = "Saved";
-        btnAfter.classList.add("saved");
-        // Remove unsaved indicator when saved
-        removeUnsavedIndicator(setNumber);
-      }
-    }, 120);
 
   } catch (e) {
     console.error(e);
-    btn.innerText = "Error";
+    if (saveSnapshot.length) {
+      const wasUnknown = saveSnapshot.some(item =>
+        scoreSaveStates.get(setNumber, item.gameIndex).status === "unknown"
+      );
+      if (e.code === "PBTRKR_SAVE_OUTCOME_UNKNOWN" || e.code === "PBTRKR_RECONCILE_TIMEOUT" || wasUnknown) {
+        scoreSaveStates.markUnknown(saveSnapshot);
+      } else {
+        scoreSaveStates.markError(saveSnapshot);
+      }
+      saveSnapshot.forEach(item => updateScoreSaveIndicator(setNumber, item.gameIndex));
+    }
     alert(e.message || "Unable to save set scores.");
+  } finally {
+    scoreSaveStates.finishSave(setNumber);
+    btn.disabled = false;
+    if (btn.isConnected) {
+      btn.innerText = "Save";
+      updateSetSaveIndicators(setNumber, saveSnapshot.length);
+    }
   }
+}
 
-  btn.disabled = false;
+function applyCommittedSetScores(setNumber, scores, saveSnapshot, ratingUpdates = []) {
+  const currentSet = (globalData.sets || []).find(set => Number(set.set) === Number(setNumber));
+  for (const item of saveSnapshot) {
+    const currentState = scoreSaveStates.get(setNumber, item.gameIndex);
+    if (currentState.version !== item.version) continue;
+    delete optimisticUpdates[`${setNumber}-${item.gameIndex}`];
+    if (currentSet) currentSet.scores[item.gameIndex] = scores[item.gameIndex] || "";
+  }
+  if (currentSet) currentSet.scoresResolved = true;
+  lastTodaySetsData = globalData.sets;
+
+  for (const update of ratingUpdates) {
+    const player = playersCache.find(entry => entry.playerKey === update.player_key);
+    if (!player) continue;
+    player.DUPR = Number(update.expected_dupr || 0) + Number(update.delta_dupr || 0);
+    player.PWRank = Number(update.expected_pw_rank ?? 50) + Number(update.delta_pw_rank || 0);
+  }
+}
+
+function updateSetSaveIndicators(setNumber, gameCount) {
+  let allSaved = gameCount > 0;
+  for (let gameIndex = 0; gameIndex < gameCount; gameIndex += 1) {
+    updateScoreSaveIndicator(setNumber, gameIndex);
+    if (scoreSaveStates.get(setNumber, gameIndex).status !== "saved") allSaved = false;
+  }
+  const btn = document.getElementById(`save-btn-${setNumber}`);
+  if (btn) btn.classList.toggle("saved", allSaved);
+}
+
+function scoreSaveStateBackgroundNotification() {
+  window.PBTRKRScoreState.runBackground(
+    () => callAPI({ action: "sendSaveNotification" }),
+    error => console.warn("Score committed, but its notification failed:", error)
+  );
+}
+
+function scoreSaveStateBackgroundRefresh() {
+  window.PBTRKRScoreState.runBackground(async () => {
+    const trend = await callAPI({ action: "getUserTrend" }, { force: true });
+    if (Array.isArray(trend)) globalData.trend = trend;
+    if (document.getElementById("dashboard")?.classList.contains("active")) {
+      await renderDashboardAnalytics(selectedPlayer);
+    }
+  }, error => console.warn("Score committed, but background analytics refresh failed:", error));
 }
 
 async function buildRatingUpdatesForSet(setNumber, scores) {
@@ -1224,7 +1313,7 @@ async function buildRatingUpdatesForSet(setNumber, scores) {
     if (!player) return null;
     return {
       player_name: player.name,
-      player_key: normalizePlayerLookupName(player.name),
+      player_key: player.playerKey || normalizePlayerLookupName(player.name),
       expected_dupr: Number(player.DUPR || 0),
       expected_pw_rank: Number(player.PWRank ?? 50),
       delta_dupr: Number(change.delta_A || 0),
@@ -3791,104 +3880,43 @@ function setWeekRange() {
 
 
 
-function showUnsavedIndicator(setNumber) {
-  const header = document.querySelector(`.set-header[data-set="${setNumber}"]`);
-  if (!header) return;
-  
-  let indicator = header.querySelector(".unsaved-dot");
-  if (!indicator) {
-    indicator = document.createElement("span");
-    indicator.className = "unsaved-dot";
-    indicator.title = "Unsaved changes";
-    header.appendChild(indicator);
-  }
-}
-
-function removeUnsavedIndicator(setNumber) {
-  const header = document.querySelector(`.set-header[data-set="${setNumber}"]`);
-  if (!header) return;
-  
-  const indicator = header.querySelector(".unsaved-dot");
-  if (indicator) {
-    indicator.remove();
-  }
-}
-
-let scoreTimeout;
-
 function updateScore(set, gameIndex, input) {
   if (isDayComplete()) return;
   if (isEditingLocked) return;
-
-  clearTimeout(scoreTimeout);
 
   const parent = input.parentElement;
   isEditingScores = true;
 
   const inputs = parent.querySelectorAll("input");
-  if (inputs.length < 2) return;
+  if (inputs.length < 2) {
+    isEditingScores = false;
+    return;
+  }
 
-  scoreTimeout = setTimeout(() => {
-    const a = Number(inputs[0].value || 0);
-    const b = Number(inputs[1].value || 0);
+  const aText = String(inputs[0].value || "").trim();
+  const bText = String(inputs[1].value || "").trim();
+  const score = aText !== "" && bText !== "" ? `${aText}-${bText}` : "";
+  const key = `${set}-${gameIndex}`;
+  optimisticUpdates[key] = score;
+  scoreSaveStates.edit(set, gameIndex, score);
+  updateScoreSaveIndicator(set, gameIndex);
 
-    const score = `${a}-${b}`;
+  const btn = document.getElementById(`save-btn-${set}`);
+  if (btn) btn.classList.remove("saved");
 
-    // 🔥 RESET SAVE BUTTON & SHOW UNSAVED INDICATOR
-const btn = document.getElementById(`save-btn-${set}`);
-if (btn && btn.classList.contains("saved")) {
-  btn.innerText = "Save";
-  btn.classList.remove("saved");
-  showUnsavedIndicator(set);
-}
-
-    // 🔥 EMPTY = DO NOTHING
-    if (a === 0 && b === 0) {
-      isEditingScores = false;
-      return;
-    }
-
-    input.blur();
-
-    // 🔥 DETERMINE RESULT (UI ONLY)
-    let result = "tie";
-    if (a > b) result = "win";
-    else if (b > a) result = "loss";
-
-    const card = input.closest(".match-card");
-    if (!card) {
-      isEditingScores = false;
-      return;
-    }
-
-    const badge = card.querySelector(".status-badge");
+  if (score && /^\d+-\d+$/.test(score)) {
+    const [a, b] = score.split("-").map(Number);
+    const result = a > b ? "win" : b > a ? "loss" : "tie";
+    const badge = input.closest(".match-card")?.querySelector(".status-badge");
     if (badge) {
       badge.className = `status-badge ${result}`;
       badge.innerText = result;
     }
+  }
 
-    // 🔥 LOCAL STATE UPDATE ONLY (NO API)
-    if (globalData.sets) {
-      const match = globalData.sets.find(m => m.set == set);
-      if (match) {
-        match.scores[gameIndex] = score;
-      }
-    }
-
-    // 🔥 TRACK UNSAVED CHANGES
-    const key = `${set}-${gameIndex}`;
-    optimisticUpdates[key] = score;
-
-    console.log("📝 Local score update only:", {
-      set,
-      game: gameIndex + 1,
-      score
-    });
-
-    // 🔥 DONE EDITING (no fake saving UI)
-    isEditingScores = false;
-
-  }, 600);
+  const match = globalData.sets?.find(item => Number(item.set) === Number(set));
+  if (match) match.scores[gameIndex] = score;
+  isEditingScores = false;
 }
 
 async function getAllSets() {
