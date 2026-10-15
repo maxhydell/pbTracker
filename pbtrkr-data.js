@@ -7,7 +7,6 @@
   const root = typeof window !== "undefined" ? window : globalThis;
   const client = () => root.supabaseClient;
   const scoreSaveRequestsInFlight = new Map();
-  const uncertainScoreSaves = new Map();
   const storage = () => (root.localStorage || {
     getItem: () => null,
     setItem: () => undefined,
@@ -416,14 +415,15 @@
     const startedAt = Date.now();
     const saveRequestId = options.saveRequestId || null;
     const timeoutMs = options.timeoutMs ?? 15000;
-    const eventPrefix = name === "pbtrkr_save_set_full" ? "save.rpc" : "supabase.rpc";
+    const isScoreSaveRpc = name === "pbtrkr_save_set_full_once" || name === "pbtrkr_save_set_full";
+    const eventPrefix = isScoreSaveRpc ? "save.rpc" : "supabase.rpc";
     const rpcStarted = {
       saveRequestId,
       event: `${eventPrefix}.started`,
       timestamp: new Date().toISOString(),
       rpcName: name,
       timeoutMs,
-      ...(name === "pbtrkr_save_set_full" ? {
+      ...(isScoreSaveRpc ? {
         identity: {
           date: args?.p_match_date || null,
           setNumber: args?.p_set_number || null
@@ -442,7 +442,7 @@
       try {
         request = client().rpc(name, args);
       } catch (error) {
-        if (name === "pbtrkr_save_set_full" && !error?.code) {
+        if (isScoreSaveRpc && !error?.code) {
           error.code = "PBTRKR_SAVE_NOT_DISPATCHED";
         }
         throw error;
@@ -469,7 +469,7 @@
         throw error;
       }
       const durationMs = Date.now() - startedAt;
-      if (name === "pbtrkr_save_set_full" && data?.success !== true) {
+      if (isScoreSaveRpc && data?.success !== true) {
         const responseError = new Error("Supabase returned without confirming the score save.");
         responseError.code = "PBTRKR_SAVE_RESPONSE_UNCONFIRMED";
         throw responseError;
@@ -483,7 +483,7 @@
         outcome: "confirmed",
         classification: classifySaveOutcome({ reachedSupabase: true, finalOutcome: "success" })
       });
-      if (name === "pbtrkr_save_set_full") {
+      if (isScoreSaveRpc) {
         console.info("PBTRKR score-save RPC timing", { durationMs, outcome: "confirmed" });
       }
       return data;
@@ -513,7 +513,7 @@
         })
       };
       console.warn(event, summary);
-      if (timedOut && name === "pbtrkr_save_set_full") {
+      if (timedOut && isScoreSaveRpc) {
         console.info("PBTRKR score-save RPC timing", { durationMs, outcome: "timeout" });
       }
       throw error;
@@ -636,10 +636,10 @@
   }
 
   function classifySaveOutcome({ reachedSupabase, rpcError, timeout, reconciliationMatches, finalOutcome, hasCommittedRow, hasSetId }) {
-    if (finalOutcome === "success") return "confirmed";
     if (reachedSupabase === false) return "not_reached_supabase";
+    if (timeout === true && reconciliationMatches === true) return "target_state_confirmed_after_timeout";
+    if (finalOutcome === "success") return "confirmed";
     if (timeout === true) {
-      if (reconciliationMatches === true) return "transaction_committed_response_lost";
       return "timeout_uncertain_transaction";
     }
     const status = safeHttpStatus(rpcError);
@@ -721,12 +721,6 @@
       && dateMatches
       && setNumberMatches
       && JSON.stringify(persistedScores) === JSON.stringify(requestedScores);
-    const saveIdentity = `${normalizedDate}:${String(setNumber)}`;
-    const uncertainSave = uncertainScoreSaves.get(saveIdentity);
-    if (matches && uncertainSave
-      && JSON.stringify(normalizedScores(uncertainSave.scores)) === JSON.stringify(requestedScores)) {
-      uncertainScoreSaves.delete(saveIdentity);
-    }
     const finalOutcome = matches ? "confirmed" : "not-confirmed";
     const summary = {
       saveRequestId,
@@ -849,6 +843,7 @@
         let ownsInFlight = false;
         let saveRpcStarted = false;
         let scores = [];
+        let expectedScores = [];
         console.info("save.started", {
           saveRequestId,
           event: "save.started",
@@ -883,6 +878,7 @@
           setNumber = String(params.set);
           setId = params.setId;
           scores = JSON.parse(params.scores || "[]");
+          expectedScores = JSON.parse(params.expectedScores || "[]").map(value => String(value ?? ""));
           saveIdentity = `${matchDate}:${setNumber}`;
           const existingSave = scoreSaveRequestsInFlight.get(saveIdentity);
           if (existingSave) {
@@ -916,61 +912,17 @@
             scoreCount: Array.isArray(scores) ? scores.length : 0,
             ratingUpdateCount: Array.isArray(ratingUpdates) ? ratingUpdates.length : 0
           });
-          const unresolvedSave = uncertainScoreSaves.get(saveIdentity);
-          if (unresolvedSave) {
-            let reconciliation;
-            try {
-              reconciliation = await reconcileSetSave(
-                unresolvedSave.date,
-                unresolvedSave.setNumber,
-                unresolvedSave.scores,
-                unresolvedSave.setId,
-                unresolvedSave.saveRequestId || saveRequestId
-              );
-            } catch (reconciliationError) {
-              const unresolvedError = new Error(
-                "A previous score save is still unconfirmed. Supabase could not be checked, so this score was not retried."
-              );
-              unresolvedError.code = "PBTRKR_PRIOR_SAVE_UNCONFIRMED";
-              unresolvedError.cause = reconciliationError;
-              throw unresolvedError;
-            }
-            if (!reconciliation.matches) {
-              const unresolvedError = new Error(
-                "A previous score save is still unconfirmed. The requested scores were not retried; verify the saved score before saving again."
-              );
-              unresolvedError.code = "PBTRKR_PRIOR_SAVE_UNCONFIRMED";
-              throw unresolvedError;
-            }
-            uncertainScoreSaves.delete(saveIdentity);
-            if (JSON.stringify(normalizedScores(scores)) === JSON.stringify(unresolvedSave.scores)) {
-              console.info("save.finished", {
-                saveRequestId,
-                event: "save.finished",
-                timestamp: new Date().toISOString(),
-                durationMs: Date.now() - stageStartedAt,
-                level: "success",
-                classification: "confirmed",
-                rpcOutcome: "not_retried_prior_request_confirmed",
-                reconciliationOutcome: "confirmed"
-              });
-              return {
-                success: true,
-                reconciled: true,
-                set_id: reconciliation.set.id,
-                scores: reconciliation.persistedScores
-              };
-            }
-          }
           const rpcArgs = {
             p_match_date: matchDate,
             p_set_number: setNumber,
             p_scores: scores,
+            p_expected_scores: expectedScores,
             p_rating_updates: ratingUpdates,
-            p_device_id: deviceId()
+            p_device_id: deviceId(),
+            p_save_request_id: saveRequestId
           };
           saveRpcStarted = true;
-          const saveResult = await rpc("pbtrkr_save_set_full", rpcArgs, {
+          const saveResult = await rpc("pbtrkr_save_set_full_once", rpcArgs, {
             timeoutMs: options.timeoutMs ?? 15000,
             saveRequestId,
             source: params.source || "service.call"
@@ -1022,7 +974,12 @@
                 timestamp: new Date().toISOString(),
                 durationMs: Date.now() - stageStartedAt,
                 level: "success",
-                classification: classifySaveOutcome({ reachedSupabase: true, finalOutcome: "success", reconciliationMatches: true }),
+                classification: classifySaveOutcome({
+                  reachedSupabase: true,
+                  timeout: true,
+                  finalOutcome: "success",
+                  reconciliationMatches: true
+                }),
                 rpcOutcome: "timeout_reconciled",
                 reconciliationOutcome: "confirmed"
               });
@@ -1041,13 +998,6 @@
           );
           uncertainError.code = "PBTRKR_SAVE_OUTCOME_UNKNOWN";
           uncertainError.cause = error;
-          uncertainScoreSaves.set(saveIdentity, {
-            date: matchDate,
-            setNumber,
-            setId,
-            scores: normalizedScores(scores),
-            saveRequestId
-          });
           console.error("save.finished", {
             saveRequestId,
             event: "save.finished",

@@ -1208,6 +1208,20 @@ function restoreResultsIfAny() {
   }
 }
 
+function submitScoreSave(context, scores, expectedScores, ratingUpdates, saveRequestId, source) {
+  const params = {
+    action: "saveSetFull",
+    set: context.setNumber,
+    date: context.date,
+    setId: context.setId,
+    scores: JSON.stringify(scores),
+    expectedScores: JSON.stringify(expectedScores),
+    ratingUpdates: JSON.stringify(ratingUpdates),
+    saveRequestId,
+    source
+  };
+  return callAPI(params);
+}
 
 
 async function saveSet(setNumber) {
@@ -1223,7 +1237,7 @@ async function saveSet(setNumber) {
     originalSet?.matchDate || originalSet?.date || window.pbtrkrDataService?.todayIso?.() || new Date()
   );
   const saveKey = `${String(saveDate || "unknown")}:${String(setNumber)}`;
-  const saveRequestId = `save-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+  let saveRequestId = `save-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
   const existingSave = saveRequestGuard.peek(saveKey);
   if (existingSave || !scoreSaveStates.tryBeginSave(setNumber)) {
     console.warn("save.duplicate.prevented", {
@@ -1255,6 +1269,8 @@ async function saveSet(setNumber) {
   let saveSnapshot = [];
   let saveContext = null;
   let attemptedScores = [];
+  let attemptedExpectedScores = [];
+  let attemptedRatingUpdates = [];
   let uncertainSaveRecord = null;
   let validationStartedAt = 0;
   let validationCompleted = false;
@@ -1290,6 +1306,7 @@ async function saveSet(setNumber) {
       setId: originalSet?.id
     };
     const previousScores = Array.isArray(originalSet?.scores) ? originalSet.scores : [];
+    attemptedExpectedScores = previousScores.map(score => String(score || ""));
     for (let index = 0; index < scores.length; index += 1) {
       const score = String(scores[index] || "");
       const previous = String(previousScores[index] || "");
@@ -1326,6 +1343,127 @@ async function saveSet(setNumber) {
     const pendingSave = readUncertainScoreSave(saveContext.date, setNumber);
     if (pendingSave) {
       uncertainSaveRecord = pendingSave;
+      if (pendingSave.saveRequestId) saveRequestId = pendingSave.saveRequestId;
+      if (pendingSave.saveRequestId
+        && Array.isArray(pendingSave.expectedScores)
+        && Array.isArray(pendingSave.ratingUpdates)) {
+        let recoveryResult;
+        try {
+          recoveryResult = await submitScoreSave(
+            {
+              date: pendingSave.date,
+              setNumber: pendingSave.setNumber,
+              setId: pendingSave.setId
+            },
+            pendingSave.scores,
+            pendingSave.expectedScores,
+            pendingSave.ratingUpdates,
+            pendingSave.saveRequestId,
+            "saveSet.idempotent_recovery"
+          );
+        } catch (recoveryError) {
+          if (recoveryError?.code === "40001") throw recoveryError;
+          const error = new Error("A previous score save is still unresolved. Its original request was safely retried; no new score snapshot was submitted.");
+          error.code = "PBTRKR_PRIOR_SAVE_UNCONFIRMED";
+          error.cause = recoveryError;
+          throw error;
+        }
+        if (recoveryResult?.success !== true) {
+          throw priorScoreSaveUnconfirmedError();
+        }
+        if (recoveryResult.replayed === true) {
+          let replayReconciliation;
+          try {
+            replayReconciliation = await window.pbtrkrDataService.reconcileSetSave(
+              pendingSave.date,
+              pendingSave.setNumber,
+              pendingSave.scores,
+              pendingSave.setId,
+              saveRequestId
+            );
+          } catch (reconciliationError) {
+            const error = priorScoreSaveUnconfirmedError();
+            error.cause = reconciliationError;
+            throw error;
+          }
+          if (!replayReconciliation.matches) {
+            clearUncertainScoreSave(saveContext.date, setNumber);
+            uncertainSaveRecord = null;
+            if (originalSet && replayReconciliation.set) {
+              originalSet.scores = replayReconciliation.persistedScores;
+              originalSet.scoresResolved = true;
+            }
+            clearMemoryCache();
+            try {
+              await loadPlayers();
+            } catch (refreshError) {
+              console.warn("save.recovery.refresh.failed", {
+                saveRequestId,
+                event: "save.recovery.refresh.failed",
+                timestamp: new Date().toISOString(),
+                error: safeSaveErrorLogDetails(refreshError)
+              });
+            }
+            finalOutcome = "confirmed_but_set_changed";
+            rpcOutcome = "prior_request_confirmed";
+            reconciliationOutcome = "set_changed_after_commit";
+            alert("The previous save was committed, but this set has since changed. Review the current scores and click Save again if you still want to apply your edits.");
+            return;
+          }
+        }
+        clearUncertainScoreSave(saveContext.date, setNumber);
+        lastCompletedStage = "save.reconciliation.completed";
+        reconciliationOutcome = recoveryResult.reconciled ? "confirmed_by_reconciliation" : "confirmed_by_idempotency";
+        if (originalSet) {
+          originalSet.scores = pendingSave.scores.map(score => String(score || ""));
+          originalSet.scoresResolved = true;
+          attemptedExpectedScores = originalSet.scores.slice();
+        }
+        clearMemoryCache();
+        if (sameScoreSnapshot(scores, pendingSave.scores)) {
+          try {
+            await loadPlayers();
+          } catch (refreshError) {
+            console.warn("save.recovery.refresh.failed", {
+              saveRequestId,
+              event: "save.recovery.refresh.failed",
+              timestamp: new Date().toISOString(),
+              error: safeSaveErrorLogDetails(refreshError)
+            });
+          }
+          scoreSaveStates.markSaved(saveSnapshot);
+          applyCommittedSetScores(setNumber, scores, saveSnapshot);
+          updateSetSaveIndicators(setNumber, scores.length);
+          finalOutcome = "confirmed";
+          rpcOutcome = "prior_request_confirmed";
+          console.info("save.ui.changed", {
+            saveRequestId,
+            event: "save.ui.changed",
+            timestamp: new Date().toISOString(),
+            state: "success",
+            source: "idempotent_recovery",
+            saveButtonDisabled: true
+          });
+          scoreSaveStateBackgroundNotification();
+          scoreSaveStateBackgroundRefresh();
+          return;
+        }
+        clearMemoryCache();
+        try {
+          await loadPlayers();
+        } catch (refreshError) {
+          console.warn("save.recovery.refresh.failed", {
+            saveRequestId,
+            event: "save.recovery.refresh.failed",
+            timestamp: new Date().toISOString(),
+            error: safeSaveErrorLogDetails(refreshError)
+          });
+        }
+        finalOutcome = "confirmed";
+        rpcOutcome = "prior_request_confirmed";
+        alert("The previous save is confirmed. Your newer edits were not submitted; review them and click Save again.");
+        return;
+      }
       let reconciliation;
       try {
         reconciliation = await window.pbtrkrDataService.reconcileSetSave(
@@ -1359,9 +1497,97 @@ async function saveSet(setNumber) {
           return;
         }
         uncertainSaveRecord = null;
+        if (originalSet) {
+          originalSet.scores = pendingSave.scores.map(score => String(score || ""));
+          originalSet.scoresResolved = true;
+          attemptedExpectedScores = originalSet.scores.slice();
+        }
+        clearMemoryCache();
+        try {
+          await loadPlayers();
+        } catch (refreshError) {
+          console.warn("save.recovery.refresh.failed", {
+            saveRequestId,
+            event: "save.recovery.refresh.failed",
+            timestamp: new Date().toISOString(),
+            error: safeSaveErrorLogDetails(refreshError)
+          });
+        }
       } else {
         reconciliationOutcome = "not_confirmed";
-        throw priorScoreSaveUnconfirmedError();
+        clearMemoryCache();
+        await loadPlayers();
+        const recoveryId = pendingSave.saveRequestId || saveRequestId;
+        saveRequestId = recoveryId;
+        const recoveryRatingUpdates = await buildRatingUpdatesForSet(setNumber, pendingSave.scores);
+        uncertainSaveRecord = {
+          ...pendingSave,
+          saveRequestId: recoveryId,
+          expectedScores: reconciliation.persistedScores,
+          ratingUpdates: recoveryRatingUpdates
+        };
+        saveUncertainScoreSave(
+          saveContext,
+          pendingSave.scores,
+          recoveryId,
+          recoveryRatingUpdates,
+          "in_flight",
+          reconciliation.persistedScores
+        );
+        let recoveryResult;
+        try {
+          recoveryResult = await submitScoreSave(
+            {
+              date: pendingSave.date,
+              setNumber: pendingSave.setNumber,
+              setId: pendingSave.setId
+            },
+            pendingSave.scores,
+            reconciliation.persistedScores,
+            recoveryRatingUpdates,
+            recoveryId,
+            "saveSet.legacy_recovery"
+          );
+        } catch (recoveryError) {
+          if (recoveryError?.code === "40001") throw recoveryError;
+          const error = priorScoreSaveUnconfirmedError();
+          error.cause = recoveryError;
+          throw error;
+        }
+        if (recoveryResult?.success !== true) throw priorScoreSaveUnconfirmedError();
+        clearUncertainScoreSave(saveContext.date, setNumber);
+        uncertainSaveRecord = null;
+        lastCompletedStage = "save.reconciliation.completed";
+        reconciliationOutcome = "confirmed_by_idempotency";
+        if (originalSet) {
+          originalSet.scores = pendingSave.scores.map(score => String(score || ""));
+          originalSet.scoresResolved = true;
+        }
+        if (sameScoreSnapshot(scores, pendingSave.scores)) {
+          scoreSaveStates.markSaved(saveSnapshot);
+          applyCommittedSetScores(setNumber, scores, saveSnapshot);
+          updateSetSaveIndicators(setNumber, scores.length);
+          finalOutcome = "confirmed";
+          rpcOutcome = "prior_request_confirmed";
+          scoreSaveStateBackgroundNotification();
+          scoreSaveStateBackgroundRefresh();
+          return;
+        }
+        clearMemoryCache();
+        try {
+          await loadPlayers();
+        } catch (refreshError) {
+          console.warn("save.recovery.refresh.failed", {
+            saveRequestId,
+            event: "save.recovery.refresh.failed",
+            timestamp: new Date().toISOString(),
+            error: safeSaveErrorLogDetails(refreshError)
+          });
+        }
+        finalOutcome = "confirmed";
+        rpcOutcome = "prior_request_confirmed";
+        alert("The previous save is confirmed. Your newer edits were not submitted; review them and click Save again.");
+        return;
       }
     } else if (scoreSaveStates.hasUnknown(setNumber, scores.length)) {
       const unknownScores = scores.map((score, gameIndex) => {
@@ -1375,7 +1601,6 @@ async function saveSet(setNumber) {
         scores: unknownScores,
         saveRequestId
       };
-      saveUncertainScoreSave(saveContext, unknownScores, saveRequestId);
       let reconciliation;
       try {
         reconciliation = await window.pbtrkrDataService.reconcileSetSave(
@@ -1408,9 +1633,66 @@ async function saveSet(setNumber) {
           scoreSaveStateBackgroundRefresh();
           return;
         }
+        if (originalSet) {
+          originalSet.scores = reconciliation.persistedScores;
+          originalSet.scoresResolved = true;
+          attemptedExpectedScores = originalSet.scores.slice();
+        }
       } else {
         reconciliationOutcome = "not_confirmed";
-        throw priorScoreSaveUnconfirmedError();
+        clearMemoryCache();
+        await loadPlayers();
+        const recoveryRatingUpdates = await buildRatingUpdatesForSet(setNumber, unknownScores);
+        uncertainSaveRecord = {
+          ...uncertainSaveRecord,
+          expectedScores: reconciliation.persistedScores,
+          ratingUpdates: recoveryRatingUpdates
+        };
+        saveUncertainScoreSave(
+          saveContext,
+          unknownScores,
+          saveRequestId,
+          recoveryRatingUpdates,
+          "in_flight",
+          reconciliation.persistedScores
+        );
+        let recoveryResult;
+        try {
+          recoveryResult = await submitScoreSave(
+            saveContext,
+            unknownScores,
+            reconciliation.persistedScores,
+            recoveryRatingUpdates,
+            saveRequestId,
+            "saveSet.unknown_state_recovery"
+          );
+        } catch (recoveryError) {
+          if (recoveryError?.code === "40001") throw recoveryError;
+          const error = priorScoreSaveUnconfirmedError();
+          error.cause = recoveryError;
+          throw error;
+        }
+        if (recoveryResult?.success !== true) throw priorScoreSaveUnconfirmedError();
+        clearUncertainScoreSave(saveContext.date, setNumber);
+        uncertainSaveRecord = null;
+        if (originalSet) {
+          originalSet.scores = unknownScores.slice();
+          originalSet.scoresResolved = true;
+        }
+        if (sameScoreSnapshot(scores, unknownScores)) {
+          scoreSaveStates.markSaved(saveSnapshot);
+          applyCommittedSetScores(setNumber, scores, saveSnapshot);
+          updateSetSaveIndicators(setNumber, scores.length);
+          finalOutcome = "confirmed";
+          rpcOutcome = "prior_request_confirmed";
+          scoreSaveStateBackgroundNotification();
+          scoreSaveStateBackgroundRefresh();
+          return;
+        }
+        finalOutcome = "confirmed";
+        rpcOutcome = "prior_request_confirmed";
+        alert("The previous save is confirmed. Your newer edits were not submitted; review them and click Save again.");
+        return;
       }
     }
 
@@ -1420,24 +1702,21 @@ async function saveSet(setNumber) {
     const ratingUpdates = window.PBTRKR_USE_SUPABASE_DATA === true
       ? await buildRatingUpdatesForSet(setNumber, scores)
       : [];
-
-    const saveParams = {
-      action: "saveSetFull",
-      set: setNumber,
-      scores: JSON.stringify(scores),
-      ratingUpdates: JSON.stringify(ratingUpdates),
-      saveRequestId,
-      source: "saveSet.click"
-    };
-    if (window.PBTRKR_USE_SUPABASE_DATA === true) {
-      saveParams.date = saveContext.date;
-      if (saveContext.setId !== undefined && saveContext.setId !== null) {
-        saveParams.setId = saveContext.setId;
-      }
-    }
+    attemptedRatingUpdates = ratingUpdates;
+    saveUncertainScoreSave(
+      saveContext, scores, saveRequestId, ratingUpdates, "in_flight", attemptedExpectedScores
+    );
+    saveAttemptPersisted = true;
     rpcOutcome = "started";
     lastCompletedStage = "save.rpc.started";
-    const res = await callAPI(saveParams);
+    const res = await submitScoreSave(
+      saveContext,
+      scores,
+      attemptedExpectedScores,
+      ratingUpdates,
+      saveRequestId,
+      "saveSet.click"
+    );
     rpcOutcome = res?.reconciled === true ? "timeout_reconciled" : "confirmed";
     lastCompletedStage = "save.rpc.completed";
 
@@ -1509,6 +1788,57 @@ async function saveSet(setNumber) {
     } else if (rpcOutcome === "not_started") {
       finalOutcome = "definite_failure";
     }
+    if (e.code === "40001" && saveContext) {
+      try {
+        const currentSet = await window.pbtrkrDataService.reconcileSetSave(
+          saveContext.date,
+          String(setNumber),
+          attemptedScores,
+          saveContext.setId,
+          saveRequestId
+        );
+        if (originalSet && currentSet.set) {
+          originalSet.scores = currentSet.persistedScores;
+          originalSet.scoresResolved = true;
+        }
+        clearMemoryCache();
+        await loadPlayers();
+        if (!saveAttemptPersisted && uncertainSaveRecord) {
+          const recoveryRatingUpdates = await buildRatingUpdatesForSet(
+            setNumber,
+            uncertainSaveRecord.scores
+          );
+          uncertainSaveRecord = {
+            ...uncertainSaveRecord,
+            expectedScores: currentSet.persistedScores,
+            ratingUpdates: recoveryRatingUpdates
+          };
+          saveUncertainScoreSave(
+            saveContext,
+            uncertainSaveRecord.scores,
+            uncertainSaveRecord.saveRequestId || saveRequestId,
+            recoveryRatingUpdates,
+            "uncertain",
+            currentSet.persistedScores
+          );
+        }
+        console.info("save.recovery.conflict_refreshed", {
+          saveRequestId,
+          event: "save.recovery.conflict_refreshed",
+          timestamp: new Date().toISOString(),
+          date: saveDate,
+          setNumber: String(setNumber),
+          persistedRowFound: Boolean(currentSet.set)
+        });
+      } catch (refreshError) {
+        console.warn("save.recovery.conflict_refresh_failed", {
+          saveRequestId,
+          event: "save.recovery.conflict_refresh_failed",
+          timestamp: new Date().toISOString(),
+          error: safeSaveErrorLogDetails(refreshError)
+        });
+      }
+    }
     if (saveSnapshot.length) {
       if (e.code === "PBTRKR_PRIOR_SAVE_UNCONFIRMED") {
         scoreSaveStates.markUnknown(saveSnapshot);
@@ -1526,7 +1856,11 @@ async function saveSet(setNumber) {
               saveUncertainScoreSave(
                 saveContext,
                 uncertainSaveRecord?.scores || attemptedScores,
-                uncertainSaveRecord?.saveRequestId || saveRequestId
+                uncertainSaveRecord?.saveRequestId || saveRequestId,
+                uncertainSaveRecord?.ratingUpdates || attemptedRatingUpdates,
+                "uncertain",
+                uncertainSaveRecord?.expectedScores || attemptedExpectedScores,
+                saveAttemptPersisted || Array.isArray(uncertainSaveRecord?.expectedScores) ? 2 : 1
               );
             } catch (storageError) {
               console.error("Unable to store score-save retry protection:", storageError);
@@ -1535,6 +1869,7 @@ async function saveSet(setNumber) {
           }
         } else {
           scoreSaveStates.markError(saveSnapshot);
+          clearUncertainScoreSave(saveContext?.date || saveDate, setNumber);
         }
         saveSnapshot.forEach(item => updateScoreSaveIndicator(setNumber, item.gameIndex));
       }
@@ -1552,7 +1887,15 @@ async function saveSet(setNumber) {
     saveRequestGuard.finish(saveKey);
     btn.disabled = isEditingLocked;
     if (btn.isConnected) {
-      btn.innerText = "Save";
+      let hasPendingSave = false;
+      try {
+        hasPendingSave = Boolean(localStorage.getItem(
+          uncertainScoreSaveKey(saveContext?.date || saveDate, setNumber)
+        ));
+      } catch (storageError) {
+        console.error("Unable to read score-save recovery state:", safeSaveErrorLogDetails(storageError));
+      }
+      btn.innerText = hasPendingSave ? "Resolve save" : "Save";
       updateSetSaveIndicators(setNumber, saveSnapshot.length);
     }
     console.info("save.ui.changed", {
@@ -1570,6 +1913,19 @@ async function saveSet(setNumber) {
       lastCompletedStage,
       rpcOutcome,
       reconciliationOutcome,
+      classification: rpcOutcome === "not_reached_supabase"
+        ? "not_reached_supabase"
+        : rpcOutcome === "timeout_reconciled"
+          ? "target_state_confirmed_after_timeout"
+          : rpcOutcome === "prior_request_confirmed" && reconciliationOutcome === "confirmed_by_idempotency"
+            ? "transaction_committed_response_lost"
+              : finalOutcome === "definite_failure"
+                ? "definitive_failure"
+                : finalOutcome === "uncertain"
+                  ? "timeout_uncertain_transaction"
+                  : finalOutcome === "confirmed" || finalOutcome === "confirmed_but_set_changed"
+                    ? "confirmed"
+                    : "not_started",
       finalUiOutcome: finalOutcome,
       saveButtonEnabled: !btn.disabled
     });
@@ -1602,14 +1958,29 @@ function readUncertainScoreSave(date, setNumber) {
   return pending;
 }
 
-function saveUncertainScoreSave(context, scores, saveRequestId) {
+function saveUncertainScoreSave(
+  context,
+  scores,
+  saveRequestId,
+  ratingUpdates = [],
+  state = "uncertain",
+  expectedScores = [],
+  version = 2
+) {
   const key = uncertainScoreSaveKey(context.date, context.setNumber);
   localStorage.setItem(key, JSON.stringify({
+    version,
+    state,
     date: window.pbtrkrDataService.dateToIso(context.date),
     setNumber: context.setNumber,
     setId: context.setId ?? null,
     scores: scores.map(score => String(score || "")),
-    saveRequestId: saveRequestId || null
+    ...(version >= 2 ? {
+      expectedScores: expectedScores.map(score => String(score || "")),
+      ratingUpdates: Array.isArray(ratingUpdates) ? ratingUpdates : []
+    } : {}),
+    saveRequestId: saveRequestId || null,
+    updatedAt: new Date().toISOString()
   }));
 }
 
