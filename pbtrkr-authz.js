@@ -23,13 +23,44 @@
     return user?.id === SUPERADMIN_USER_ID || isPbtrkrEditorRole(user?.app_metadata?.role);
   }
 
+  function getDeviceStorageContext() {
+    const storage = root.localStorage;
+    const query = new URLSearchParams(root.location?.search || "");
+    const player = (query.get("p")
+      || storage?.getItem("pbTracker_playerPref_v1")
+      || storage?.getItem("player")
+      || "").trim().toLowerCase();
+    return {
+      storage,
+      key: player ? `pbTracker_deviceId_v1_${player}` : "pbTracker_deviceId_v1"
+    };
+  }
+
+  function getDeviceId() {
+    const { storage, key } = getDeviceStorageContext();
+    if (!storage) return "";
+    return storage.getItem(key) || storage.getItem("pbTracker_deviceId_v1") || "";
+  }
+
+  function getOrCreateDeviceId() {
+    const { storage, key } = getDeviceStorageContext();
+    if (!storage) return "";
+    const existing = storage.getItem(key) || storage.getItem("pbTracker_deviceId_v1");
+    if (existing) return existing;
+    const id = root.crypto.randomUUID();
+    storage.setItem(key, id);
+    return id;
+  }
+
   const api = {
     SUPERADMIN_USER_ID,
     normalizeRole,
     isAdminRole,
     isPbtrkrEditorRole,
     isAdminUser,
-    isPbtrkrEditorUser
+    isPbtrkrEditorUser,
+    getDeviceId,
+    getOrCreateDeviceId
   };
   root.PBTRKRAuthorization = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;

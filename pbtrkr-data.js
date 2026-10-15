@@ -97,9 +97,7 @@
   }
 
   function deviceId() {
-    const player = storage().getItem("player");
-    const key = player ? `pbTracker_deviceId_v1_${player}` : "pbTracker_deviceId_v1";
-    return storage().getItem(key) || storage().getItem("pbTracker_deviceId_v1") || "";
+    return root.PBTRKRAuthorization?.getDeviceId() || "";
   }
 
   function num(value) {
@@ -494,6 +492,20 @@
           p_rating_updates: ratingUpdates,
           p_device_id: deviceId()
         };
+        let sessionData = null;
+        try {
+          const sessionResult = await client().auth?.getSession?.();
+          sessionData = sessionResult?.data || null;
+        } catch {
+          sessionData = null;
+        }
+        console.info("PBTRKR score-save authorization context", {
+          projectUrl: client().supabaseUrl || null,
+          userId: sessionData?.session?.user?.id || null,
+          deviceId: rpcArgs.p_device_id,
+          matchDate,
+          setNumber
+        });
         try {
           return await rpc("pbtrkr_save_set_full", rpcArgs, {
             timeoutMs: options.timeoutMs ?? 15000

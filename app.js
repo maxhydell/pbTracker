@@ -160,16 +160,9 @@ function validateSetScoreInputs(setNumber) {
 
 function getOrCreateDeviceId() {
   const player = getPlayerFromURL() || getPreferredPlayerFromStorage() || localStorage.getItem("player");
-  const playerKey = player ? `${LS_DEVICE_ID}_${player}` : LS_DEVICE_ID;
-  
-  let id = localStorage.getItem(playerKey);
-  if (!id) {
-    id = crypto.randomUUID();
-    localStorage.setItem(playerKey, id);
-    console.log("📱 New device ID created for", player || "guest", ":", id);
-  } else {
-    console.log("📱 Using stored device ID for", player || "guest", ":", id);
-  }
+  const id = window.PBTRKRAuthorization?.getOrCreateDeviceId();
+  if (!id) throw new Error("PBTRKR device identity helper is unavailable");
+  console.log("📱 Using shared device ID for", player || "guest", ":", id);
   deviceId = id;
   return id;
 }
