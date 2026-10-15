@@ -7,10 +7,14 @@
   }
 
   function normalizeRoleList(value) {
+    if (value === null || value === undefined) return [];
     if (Array.isArray(value)) {
-      return value.map(item => normalizeRole(item)).filter(Boolean);
+      return value.flatMap(item => normalizeRoleList(item));
     }
-    return [normalizeRole(value)].filter(Boolean);
+    if (typeof value === "string") {
+      return value.split(",").map(part => normalizeRole(part)).filter(Boolean);
+    }
+    return [];
   }
 
   function hasAnyRole(roleSet, roleValue) {
@@ -28,14 +32,12 @@
 
   function userRoles(user) {
     const appMetadata = user?.app_metadata || {};
-    const metadataRoles = Array.isArray(appMetadata.roles) ? appMetadata.roles : [];
-    const userRoles = Array.isArray(user?.roles) ? user.roles : [];
-    return [
+    return normalizeRoleList([
       user?.role,
+      user?.roles,
       appMetadata?.role,
-      ...metadataRoles,
-      ...userRoles
-    ];
+      appMetadata?.roles
+    ]);
   }
 
   function isAdminUser(user) {

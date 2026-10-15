@@ -53,6 +53,11 @@ let globalData = {
 let userIp = null;
 let isEditingLocked = true;
 let loadingProgress = 0;
+
+function setEditingLockState(locked) {
+  isEditingLocked = Boolean(locked);
+  window.isEditingLocked = isEditingLocked;
+}
 let rankingsComponentsReady = false;
 let deviceId = null;
 let lastMetaSeen = null;
@@ -171,7 +176,7 @@ function getOrCreateDeviceId() {
 async function checkDeviceWhitelist() {
   try {
     if (window.PBTRKR_USE_SUPABASE_DATA !== true) {
-      isEditingLocked = false;
+      setEditingLockState(false);
       localStorage.setItem(LS_DEVICE_VERIFIED, "1");
       return;
     }
@@ -182,7 +187,7 @@ async function checkDeviceWhitelist() {
 
     if (!window.supabaseClient) {
       console.warn("⚠️ Supabase client not available, cannot check whitelist");
-      isEditingLocked = true;
+      setEditingLockState(true);
       localStorage.removeItem(LS_DEVICE_VERIFIED);
       return;
     }
@@ -191,13 +196,13 @@ async function checkDeviceWhitelist() {
     const session = authData?.session;
     const user = session?.user;
     if (authError || !session) {
-      isEditingLocked = true;
+      setEditingLockState(true);
       localStorage.removeItem(LS_DEVICE_VERIFIED);
       setTimeout(() => showAccessRestrictionPopup("Sign in with your provisioned PBTRKR account to continue."), 500);
       return;
     }
     if (!window.PBTRKRAuthorization?.isPbtrkrEditorUser(user)) {
-      isEditingLocked = true;
+      setEditingLockState(true);
       localStorage.removeItem(LS_DEVICE_VERIFIED);
       setTimeout(() => showAccessRestrictionPopup("This account lacks a trusted PBTRKR role. Ask an administrator to provision the user and assign app_metadata.role."), 500);
       return;
@@ -209,12 +214,12 @@ async function checkDeviceWhitelist() {
     const authorized = await window.pbtrkrDataService.isDeviceAuthorized(id);
 
     if (authorized) {
-      isEditingLocked = false;
+      setEditingLockState(false);
       localStorage.setItem(LS_DEVICE_VERIFIED, "1");
       clearAccessRestrictionPopups();
       console.log("✅ Device whitelisted:", id);
     } else {
-      isEditingLocked = true;
+      setEditingLockState(true);
       localStorage.removeItem(LS_DEVICE_VERIFIED);
       console.warn("⚠️ Device NOT whitelisted:", id);
       setTimeout(() => {
@@ -224,13 +229,13 @@ async function checkDeviceWhitelist() {
 
   } catch (err) {
     console.error("❌ Device check error:", err);
-    isEditingLocked = true;
+    setEditingLockState(true);
   }
 }
 
 if (window.supabaseClient?.auth?.onAuthStateChange) {
   window.supabaseClient.auth.onAuthStateChange(() => {
-    isEditingLocked = true;
+    setEditingLockState(true);
     localStorage.removeItem(LS_DEVICE_VERIFIED);
     if (appBootComplete) {
       checkDeviceWhitelist().then(() => {
