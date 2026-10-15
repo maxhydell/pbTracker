@@ -412,27 +412,75 @@
 
   async function rpc(name, args, options = {}) {
     const startedAt = Date.now();
+    const saveRequestId = options.saveRequestId || null;
+    const timeoutMs = options.timeoutMs ?? 15000;
+    const rpcStarted = {
+      saveRequestId,
+      event: "save.rpc.started",
+      timestamp: new Date().toISOString(),
+      rpcName: name,
+      timeoutMs,
+      argKeys: Object.keys(args || {}),
+      argTypes: summarizeRpcArgs(args),
+      requestKind: "supabase_rpc"
+    };
+    console.info("save.rpc.started", rpcStarted);
     try {
       const response = await awaitSupabaseRequest(
-        client().rpc(name, args), options.timeoutMs, "PBTRKR_SAVE_TIMEOUT"
+        client().rpc(name, args), timeoutMs, "PBTRKR_SAVE_TIMEOUT"
       );
       const { data, error } = response;
-      if (error) throw error;
-      if (name === "pbtrkr_save_set_full") {
-        console.info("PBTRKR score-save RPC timing", {
+      if (error) {
+        console.warn("save.rpc.completed", {
+          saveRequestId,
+          event: "save.rpc.completed",
+          timestamp: new Date().toISOString(),
           durationMs: Date.now() - startedAt,
-          outcome: "confirmed"
+          rpcName: name,
+          outcome: "error",
+          errorCode: safeErrorCode(error),
+          httpStatus: safeHttpStatus(error),
+          errorMessage: sanitizeForLog(error?.message)
         });
+        throw error;
       }
+      const durationMs = Date.now() - startedAt;
+      console.info("save.rpc.completed", {
+        saveRequestId,
+        event: "save.rpc.completed",
+        timestamp: new Date().toISOString(),
+        durationMs,
+        rpcName: name,
+        outcome: "confirmed",
+        classification: classifySaveOutcome({ reachedSupabase: true, finalOutcome: "success" })
+      });
+      console.info("PBTRKR score-save RPC timing", { durationMs, outcome: "confirmed" });
       return data;
     } catch (error) {
-      if (name === "pbtrkr_save_set_full") {
-        console.warn("PBTRKR score-save RPC timing", {
-          durationMs: Date.now() - startedAt,
-          outcome: error?.code === "PBTRKR_SAVE_TIMEOUT" ? "timeout" : "error",
-          errorCode: safeErrorCode(error),
-          httpStatus: safeHttpStatus(error)
-        });
+      const timedOut = error?.code === "PBTRKR_SAVE_TIMEOUT";
+      const durationMs = Date.now() - startedAt;
+      const outcome = timedOut ? "timeout" : "error";
+      const summary = {
+        saveRequestId,
+        event: timedOut ? "save.rpc.timeout" : "save.rpc.failed",
+        timestamp: new Date().toISOString(),
+        durationMs,
+        rpcName: name,
+        outcome,
+        errorCode: safeErrorCode(error),
+        httpStatus: safeHttpStatus(error),
+        errorMessage: sanitizeForLog(error?.message),
+        timeoutMs,
+        classification: classifySaveOutcome({
+          reachedSupabase: true,
+          timeout: timedOut,
+          rpcError: error,
+          finalOutcome: timedOut ? "timeout" : "error"
+        })
+      };
+      console.warn(timedOut ? "save.rpc.timeout" : "save.rpc.failed", summary);
+      if (timedOut) {
+        console.info("PBTRKR score-save RPC timing", { durationMs, outcome: "timeout" });
       }
       throw error;
     }
@@ -472,14 +520,70 @@
     }
   }
 
+  function sanitizeForLog(value, seen = new WeakSet()) {
+    if (value === null || value === undefined) return value;
+    if (typeof value === "string") {
+      if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
+        const [local, domain] = value.split("@");
+        const maskedLocal = local.length <= 2 ? "*".repeat(local.length) : `${local.slice(0, 2)}***`;
+        return `${maskedLocal}@${domain}`;
+      }
+      return value.length > 180 ? `${value.slice(0, 177)}...` : value;
+    }
+    if (typeof value === "number" || typeof value === "boolean") return value;
+    if (Array.isArray(value)) return value.slice(0, 8).map(item => sanitizeForLog(item, seen));
+    if (typeof value === "object") {
+      if (seen.has(value)) return "[Circular]";
+      seen.add(value);
+      const output = {};
+      Object.entries(value).forEach(([key, nested]) => {
+        if (/token|secret|key|password|refresh|magic|email/i.test(key) && typeof nested === "string") {
+          output[key] = key.toLowerCase().includes("email") ? sanitizeForLog(nested) : "[redacted]";
+        } else {
+          output[key] = sanitizeForLog(nested, seen);
+        }
+      });
+      return output;
+    }
+    return String(value);
+  }
+
+  function summarizeRpcArgs(args) {
+    return Object.fromEntries(Object.entries(args || {}).map(([key, value]) => {
+      const type = Array.isArray(value) ? "array" : value === null ? "null" : typeof value;
+      const summary = type === "string" ? `${value.length} chars` : type === "array" ? `${value.length} items` : String(value);
+      return [key, { type, sample: sanitizeForLog(summary) }];
+    }));
+  }
+
+  function makeSaveRequestId() {
+    return `save-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+  }
+
+  function classifySaveOutcome({ reachedSupabase, rpcError, timeout, reconciliationMatches, finalOutcome, hasCommittedRow, hasSetId }) {
+    if (finalOutcome === "success") return "confirmed";
+    if (reachedSupabase === false) return "not_reached_supabase";
+    if (timeout === true) {
+      if (reconciliationMatches === true) return "transaction_committed_response_lost";
+      if (hasCommittedRow === true || hasSetId === true) return "transaction_committed_response_lost";
+      return "timeout_uncertain_transaction";
+    }
+    if (rpcError && String(rpcError.code || "").startsWith("42501")) return "definitive_failure";
+    if (rpcError && String(rpcError.code || "").startsWith("23")) return "definitive_failure";
+    if (rpcError) return "definitive_failure";
+    return "uncertain_outcome";
+  }
+
   function normalizedScores(scores) {
     return (scores || []).map(value => String(value ?? ""));
   }
 
-  async function reconcileSetSave(matchDate, setNumber, expectedScores, expectedSetId) {
+  async function reconcileSetSave(matchDate, setNumber, expectedScores, expectedSetId, saveRequestId = null) {
     const normalizedDate = dateToIso(matchDate);
     if (!normalizedDate) throw new Error("Cannot reconcile a score save with an invalid match date");
     const startedAt = Date.now();
+    const logContext = { saveRequestId, event: "save.reconciliation.started", timestamp: new Date().toISOString(), matchDate: normalizedDate, setNumber: String(setNumber), setId: expectedSetId ?? null, expectedScoreCount: Array.isArray(expectedScores) ? expectedScores.length : 0 };
+    console.info("save.reconciliation.started", logContext);
     let data;
     try {
       const response = await awaitSupabaseRequest(client().from("pbtrkr_sets")
@@ -491,11 +595,14 @@
       if (response.error) throw response.error;
       data = response.data;
     } catch (error) {
-      console.warn("PBTRKR score-save reconciliation", {
+      console.warn("save.reconciliation.completed", {
+        saveRequestId,
+        timestamp: new Date().toISOString(),
         durationMs: Date.now() - startedAt,
         outcome: error?.code === "PBTRKR_RECONCILE_TIMEOUT" ? "timeout" : "error",
         errorCode: safeErrorCode(error),
-        httpStatus: safeHttpStatus(error)
+        httpStatus: safeHttpStatus(error),
+        errorMessage: sanitizeForLog(error?.message)
       });
       throw error;
     }
@@ -509,13 +616,33 @@
     const intendedRpcRow = Boolean(current) && String(current.id) === String(first?.id);
     const matches = intendedRpcRow
       && JSON.stringify(persistedScores) === JSON.stringify(requestedScores);
-    console.info("PBTRKR score-save reconciliation", {
+    const finalOutcome = matches ? "confirmed" : "not-confirmed";
+    const summary = {
+      saveRequestId,
+      timestamp: new Date().toISOString(),
       durationMs: Date.now() - startedAt,
       candidateCount: candidates.length,
       duplicateRowsDetected: candidates.length > 1,
       intendedRpcRow,
-      outcome: matches ? "confirmed" : "not-confirmed"
-    });
+      expectedSetId: expectedSetId ?? null,
+      matchedSetId: current?.id ?? null,
+      persistedScoreCount: persistedScores.length,
+      requestedScoreCount: requestedScores.length,
+      fieldsMatched: {
+        matchDate: Boolean(current && String(current.match_date) === String(normalizedDate)),
+        setNumber: Boolean(current && String(current.set_number) === String(setNumber)),
+        scoreSnapshot: JSON.stringify(persistedScores) === JSON.stringify(requestedScores)
+      },
+      outcome: finalOutcome,
+      classification: classifySaveOutcome({
+        reachedSupabase: true,
+        timeout: false,
+        reconciliationMatches: matches,
+        hasCommittedRow: Boolean(current),
+        hasSetId: Boolean(expectedSetId)
+      })
+    };
+    console.info("save.reconciliation.completed", summary);
     return {
       matches,
       set: current,
@@ -595,32 +722,106 @@
       case "lastUpdated":
         return getLastUpdated();
       case "saveSetFull": {
-        const ratingUpdates = JSON.parse(params.ratingUpdates || "[]").map(update => ({
-          ...update,
-          player_key: update.player_key || String(update.player_name || "").trim().toLowerCase()
-        }));
-        const matchDate = dateToIso(params.date || todayIso());
-        if (!matchDate) throw new Error("Cannot save a set with an invalid match date");
-        const setNumber = String(params.set);
-        const setId = params.setId;
-        const scores = JSON.parse(params.scores || "[]");
-        const rpcArgs = {
-          p_match_date: matchDate,
-          p_set_number: setNumber,
-          p_scores: scores,
-          p_rating_updates: ratingUpdates,
-          p_device_id: deviceId()
-        };
+        let saveRequestId = params.saveRequestId || makeSaveRequestId();
+        const stageStartedAt = Date.now();
+        let matchDate = null;
+        let setNumber = null;
+        let setId = null;
+        let scores = [];
+        console.info("save.started", {
+          saveRequestId,
+          event: "save.started",
+          timestamp: new Date().toISOString(),
+          setNumber: String(params.set ?? ""),
+          action: action,
+          scoreCount: Array.isArray(JSON.parse(params.scores || "[]")) ? JSON.parse(params.scores || "[]").length : 0,
+          page: typeof window !== "undefined" ? window.location?.pathname || "" : ""
+        });
         try {
+          const ratingUpdates = JSON.parse(params.ratingUpdates || "[]").map(update => ({
+            ...update,
+            player_key: update.player_key || String(update.player_name || "").trim().toLowerCase()
+          }));
+          matchDate = dateToIso(params.date || todayIso());
+          if (!matchDate) {
+            const error = new Error("Cannot save a set with an invalid match date");
+            console.error("save.validation.failed", {
+              saveRequestId,
+              event: "save.validation.failed",
+              timestamp: new Date().toISOString(),
+              durationMs: Date.now() - stageStartedAt,
+              stage: "date-normalization",
+              reason: error.message
+            });
+            throw error;
+          }
+          setNumber = String(params.set);
+          setId = params.setId;
+          scores = JSON.parse(params.scores || "[]");
+          console.info("save.validation.completed", {
+            saveRequestId,
+            event: "save.validation.completed",
+            timestamp: new Date().toISOString(),
+            durationMs: Date.now() - stageStartedAt,
+            matchDate,
+            setNumber,
+            setId: setId ?? null,
+            scoreCount: Array.isArray(scores) ? scores.length : 0,
+            ratingUpdateCount: Array.isArray(ratingUpdates) ? ratingUpdates.length : 0
+          });
+          const rpcArgs = {
+            p_match_date: matchDate,
+            p_set_number: setNumber,
+            p_scores: scores,
+            p_rating_updates: ratingUpdates,
+            p_device_id: deviceId()
+          };
           const saveResult = await rpc("pbtrkr_save_set_full", rpcArgs, {
-            timeoutMs: options.timeoutMs ?? 15000
+            timeoutMs: options.timeoutMs ?? 15000,
+            saveRequestId
+          });
+          console.info("save.finished", {
+            saveRequestId,
+            event: "save.finished",
+            timestamp: new Date().toISOString(),
+            durationMs: Date.now() - stageStartedAt,
+            level: "success",
+            classification: classifySaveOutcome({ reachedSupabase: true, finalOutcome: "success" }),
+            rpcOutcome: "confirmed",
+            reconciliationOutcome: "not_required"
           });
           return saveResult;
         } catch (error) {
+          const timeoutHappened = error?.code === "PBTRKR_SAVE_TIMEOUT";
+          console.error("save.finished", {
+            saveRequestId,
+            event: "save.finished",
+            timestamp: new Date().toISOString(),
+            durationMs: Date.now() - stageStartedAt,
+            level: timeoutHappened ? "timeout" : "error",
+            errorCode: safeErrorCode(error),
+            errorMessage: sanitizeForLog(error?.message),
+            classification: classifySaveOutcome({
+              reachedSupabase: true,
+              timeout: timeoutHappened,
+              rpcError: error,
+              finalOutcome: timeoutHappened ? "timeout" : "error"
+            })
+          });
           if (error.code !== "PBTRKR_SAVE_TIMEOUT") throw error;
           try {
-            const reconciliation = await reconcileSetSave(matchDate, setNumber, scores, setId);
+            const reconciliation = await reconcileSetSave(matchDate, setNumber, scores, setId, saveRequestId);
             if (reconciliation.matches) {
+              console.info("save.finished", {
+                saveRequestId,
+                event: "save.finished",
+                timestamp: new Date().toISOString(),
+                durationMs: Date.now() - stageStartedAt,
+                level: "success",
+                classification: classifySaveOutcome({ reachedSupabase: true, finalOutcome: "success", reconciliationMatches: true }),
+                rpcOutcome: "timeout_reconciled",
+                reconciliationOutcome: "confirmed"
+              });
               return {
                 success: true,
                 reconciled: true,
@@ -636,6 +837,18 @@
           );
           uncertainError.code = "PBTRKR_SAVE_OUTCOME_UNKNOWN";
           uncertainError.cause = error;
+          console.error("save.finished", {
+            saveRequestId,
+            event: "save.finished",
+            timestamp: new Date().toISOString(),
+            durationMs: Date.now() - stageStartedAt,
+            level: "uncertain",
+            classification: "timeout_uncertain_transaction",
+            rpcOutcome: "timeout",
+            reconciliationOutcome: "not_confirmed",
+            errorCode: uncertainError.code,
+            errorMessage: sanitizeForLog(uncertainError.message)
+          });
           throw uncertainError;
         }
       }
