@@ -16,7 +16,7 @@ function doGet(e) {
     // 🔥 ADD THESE LOGS RIGHT HERE
     Logger.log("🔥 doGet HIT");
     Logger.log("ACTION:", action);
-    Logger.log("PARAMS:", JSON.stringify(e.parameter));
+    Logger.log("PARAM_KEYS:", Object.keys(e.parameter).sort().join(","));
 
 
     let result = {};
@@ -85,7 +85,14 @@ function saveSetFull(data) {
     try {
 
   Logger.log("🔥 saveSetFull START");
-Logger.log(JSON.stringify(data));
+    Logger.log(JSON.stringify({
+      event: "save.started",
+      saveRequestId: data.saveRequestId || null,
+      date: data.date || null,
+      setNumber: String(data.set || ""),
+      scorePayloadPresent: Boolean(data.scores),
+      ratingUpdatePayloadPresent: Boolean(data.ratingUpdates)
+    }));
   const setNum = Number(data.set);
   const newScores = JSON.parse(data.scores || "[]").map(score => String(score || "").trim());
 

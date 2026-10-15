@@ -10,8 +10,7 @@
       },
       finish(identity) {
         const key = String(identity ?? "");
-        if (!key) return false;
-        if (!inFlight.has(key)) return false;
+        if (!key || !inFlight.has(key)) return false;
         inFlight.delete(key);
         return true;
       },
