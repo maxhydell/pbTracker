@@ -202,7 +202,7 @@ async function checkDeviceWhitelist() {
       setTimeout(() => showAccessRestrictionPopup("Sign in with your provisioned PBTRKR account to continue."), 500);
       return;
     }
-    if (!window.pbtrkrDataService?.isEditorRole(role)) {
+    if (!window.PBTRKRAuthorization?.isPbtrkrEditorRole(role)) {
       isEditingLocked = true;
       localStorage.removeItem(LS_DEVICE_VERIFIED);
       setTimeout(() => showAccessRestrictionPopup("This account lacks a trusted PBTRKR role. Ask an administrator to provision the user and assign app_metadata.role."), 500);
@@ -419,7 +419,7 @@ function showAccessRestrictionPopup(message = "Sign in with your approved PBTRKR
 
   window.supabaseClient?.auth.getSession().then(({ data }) => {
     const role = data?.session?.user?.app_metadata?.role;
-    if (!window.pbtrkrDataService?.isAdminRole(role)) return;
+    if (!window.PBTRKRAuthorization?.isAdminRole(role)) return;
     document.querySelectorAll('[id^="approveDeviceBtn-"]').forEach(button => {
       button.style.display = "block";
     });
@@ -1532,7 +1532,7 @@ async function ensureCurrentDeviceWhitelisted() {
 async function approveCurrentDevice() {
   if (!window.supabaseClient) return false;
   const { data: authData, error: authError } = await window.supabaseClient.auth.getSession();
-  if (authError || !window.pbtrkrDataService?.isAdminRole(authData?.session?.user?.app_metadata?.role)) {
+  if (authError || !window.PBTRKRAuthorization?.isAdminRole(authData?.session?.user?.app_metadata?.role)) {
     alert("Only a PBTRKR admin can approve devices.");
     return false;
   }

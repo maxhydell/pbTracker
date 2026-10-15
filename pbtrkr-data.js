@@ -11,12 +11,16 @@
     setItem: () => undefined,
     removeItem: () => undefined
   });
+  function normalizeRole(role) {
+    return root.PBTRKRAuthorization?.normalizeRole(role) || "";
+  }
+
   function isAdminRole(role) {
-    return root.PBTRKRAuthorization?.isAdminRole(role) === true;
+    return root.PBTRKRAuthorization?.isAdminRole(normalizeRole(role)) === true;
   }
 
   function isEditorRole(role) {
-    return root.PBTRKRAuthorization?.isPbtrkrEditorRole(role) === true;
+    return root.PBTRKRAuthorization?.isPbtrkrEditorRole(normalizeRole(role)) === true;
   }
   const DAY_FORMATTER = new Intl.DateTimeFormat("en-CA", {
     timeZone: "America/New_York",
