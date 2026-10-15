@@ -19,6 +19,7 @@ let scheduleRefreshPausedUntil = 0;
 let appStartupPromise = null;
 let appBootComplete = false;
 let refreshLoopStarted = false;
+const saveRequestsInFlight = new Map();
 const BOOK_COURT_STORAGE_KEY = "pbTracker_bookedCourtDays_v1";
 
 const LS_DAY_COMPLETE = "pbTracker_dayComplete";
@@ -1193,9 +1194,30 @@ async function saveSet(setNumber) {
     alert("⚠️ Editing is locked. Enter the access code to proceed.");
     return;
   }
-  
+
   const btn = document.getElementById(`save-btn-${setNumber}`);
   if (!btn) return;
+  let saveKey = null;
+  const duplicateGuard = () => {
+    const resolvedDate = window.pbtrkrDataService?.dateToIso(globalData?.sets?.find(set => Number(set.set) === Number(setNumber))?.matchDate || globalData?.sets?.find(set => Number(set.set) === Number(setNumber))?.date || window.pbtrkrDataService?.todayIso?.() || new Date());
+    saveKey = `${String(resolvedDate || "unknown")}:${String(setNumber)}`;
+    const existingSave = saveRequestsInFlight.get(saveKey);
+    if (existingSave) {
+      console.warn("save.duplicate.prevented", {
+        event: "save.duplicate.prevented",
+        saveRequestId: existingSave.saveRequestId,
+        saveKey,
+        setNumber: String(setNumber),
+        source: "saveSet.click",
+        inFlight: true
+      });
+      return true;
+    }
+    return false;
+  };
+  if (duplicateGuard()) {
+    return;
+  }
   if (!scoreSaveStates.tryBeginSave(setNumber)) return;
   let saveSnapshot = [];
   let saveContext = null;
@@ -1203,6 +1225,10 @@ async function saveSet(setNumber) {
   let priorSaveUnresolved = false;
   let retryingUnresolvedSnapshot = false;
   let pendingSaveAttempt = null;
+  const saveRequestId = `save-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+  if (saveKey) {
+    saveRequestsInFlight.set(saveKey, { saveRequestId, setNumber: String(setNumber), startedAt: Date.now() });
+  }
   try {
     validateSetScoreInputs(setNumber);
     const scores = collectSetScoresFromDom(setNumber);
@@ -1307,7 +1333,8 @@ async function saveSet(setNumber) {
       action: "saveSetFull",
       set: setNumber,
       scores: JSON.stringify(scores),
-      ratingUpdates: JSON.stringify(ratingUpdates)
+      ratingUpdates: JSON.stringify(ratingUpdates),
+      saveRequestId
     };
     if (window.PBTRKR_USE_SUPABASE_DATA === true) {
       saveParams.date = saveContext.date;
@@ -1374,6 +1401,11 @@ async function saveSet(setNumber) {
     alert(e.message || "Unable to save set scores.");
   } finally {
     scoreSaveStates.finishSave(setNumber);
+    if (saveKey) {
+      if (saveRequestsInFlight.has(saveKey)) {
+        saveRequestsInFlight.delete(saveKey);
+      }
+    }
     btn.disabled = false;
     if (btn.isConnected) {
       btn.innerText = "Save";

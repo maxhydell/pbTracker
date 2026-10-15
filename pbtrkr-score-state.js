@@ -1,4 +1,29 @@
 (function attachPbtrkrScoreState(root) {
+  function createSaveRequestGuard() {
+    const inFlight = new Map();
+    return {
+      begin(identity, metadata = {}) {
+        const key = String(identity ?? "");
+        if (!key || inFlight.has(key)) return false;
+        inFlight.set(key, { ...metadata, startedAt: Date.now() });
+        return true;
+      },
+      finish(identity) {
+        const key = String(identity ?? "");
+        if (!key) return false;
+        if (!inFlight.has(key)) return false;
+        inFlight.delete(key);
+        return true;
+      },
+      peek(identity) {
+        return inFlight.get(String(identity ?? "")) || null;
+      },
+      has(identity) {
+        return inFlight.has(String(identity ?? ""));
+      }
+    };
+  }
+
   function create() {
     const states = new Map();
     const savesInFlight = new Set();
@@ -87,7 +112,8 @@
       markUnknown: rows => updateMatching(rows, "unknown"),
       tryBeginSave,
       finishSave,
-      hasUnknown
+      hasUnknown,
+      createSaveRequestGuard
     };
   }
 
