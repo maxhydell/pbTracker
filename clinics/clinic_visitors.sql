@@ -28,7 +28,7 @@ create index if not exists visitors_clinic_event_id_time_idx
 
 alter table public.visitors enable row level security;
 
--- Public event views may append telemetry, but reads require clinic_admin.
+-- Public event views may append telemetry, but reads require a trusted admin role.
 -- clinic_event_id NULL preserves the existing main-app visitor insert shape.
 drop policy if exists "PBTRKR visitor tracking inserts" on public.visitors;
 create policy "PBTRKR visitor tracking inserts"
@@ -51,14 +51,14 @@ create policy "PBTRKR visitor reads require clinic admin"
   as restrictive
   for select
   to public
-  using ((select auth.jwt() -> 'app_metadata' ->> 'role') = 'clinic_admin');
+  using ((select auth.jwt() -> 'app_metadata' ->> 'role') in ('clinic_admin', 'pbtrkr_admin'));
 
 drop policy if exists "Clinic admins can read visitor analytics" on public.visitors;
 create policy "Clinic admins can read visitor analytics"
   on public.visitors
   for select
   to authenticated
-  using ((select auth.jwt() -> 'app_metadata' ->> 'role') = 'clinic_admin');
+  using ((select auth.jwt() -> 'app_metadata' ->> 'role') in ('clinic_admin', 'pbtrkr_admin'));
 
 grant insert on public.visitors to anon, authenticated;
 grant select on public.visitors to authenticated;

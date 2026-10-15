@@ -24,6 +24,7 @@
   let toastTimeout;
 
   const supabaseClient = window.supabase?.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  const isAdminRole = role => window.PBTRKRAuthorization?.isAdminRole(role) === true;
 
   function escapeHtml(value) {
     return String(value ?? "").replace(/[&<>"']/g, (character) => ({
@@ -85,7 +86,7 @@
     const address = event.address || "";
     const availability = event.is_full ? "Full" : "Registration open";
     const availabilityClass = event.is_full ? "status-full" : "status-open";
-    const canViewVisitors = currentSession?.user?.app_metadata?.role === "clinic_admin";
+    const canViewVisitors = isAdminRole(currentSession?.user?.app_metadata?.role);
 
     return `
       <article class="event-card" data-event-id="${escapeHtml(event.id)}">
@@ -202,10 +203,10 @@
     accountButton.classList.toggle("button-secondary", true);
     accountButton.setAttribute("aria-expanded", "false");
     if (accountEmail) accountEmail.textContent = user?.email || "Account";
-    if (accountRole) accountRole.textContent = user?.app_metadata?.role === "clinic_admin" ? "Clinic Administrator" : "Account";
+    if (accountRole) accountRole.textContent = isAdminRole(user?.app_metadata?.role) ? "Clinic Administrator" : "Account";
     closeAccountPopover();
     if (Array.isArray(loadedEvents)) renderLoadedEvents();
-    if (!user || user.app_metadata?.role !== "clinic_admin") closeAnalyticsModal();
+    if (!user || !isAdminRole(user.app_metadata?.role)) closeAnalyticsModal();
   }
 
   function renderLoadedEvents() {
@@ -314,7 +315,7 @@
         window.location.assign("/clinic/?p=auth");
         return;
       }
-      if (user.app_metadata?.role !== "clinic_admin") {
+      if (!isAdminRole(user.app_metadata?.role)) {
         showToast("Only clinic administrators can delete events.");
         return;
       }
@@ -500,7 +501,7 @@
   }
 
   async function openVisitorAnalytics(button) {
-    if (!supabaseClient || currentSession?.user?.app_metadata?.role !== "clinic_admin") {
+    if (!supabaseClient || !isAdminRole(currentSession?.user?.app_metadata?.role)) {
       showToast("Visitor analytics are available to clinic administrators only.");
       return;
     }
@@ -516,7 +517,7 @@
     try {
       const { data: sessionData, error: sessionError } = await supabaseClient.auth.getSession();
       if (sessionError) throw sessionError;
-      if (sessionData?.session?.user?.app_metadata?.role !== "clinic_admin") {
+      if (!isAdminRole(sessionData?.session?.user?.app_metadata?.role)) {
         closeAnalyticsModal();
         showToast("Visitor analytics are available to clinic administrators only.");
         return;
@@ -527,11 +528,11 @@
         .eq("clinic_event_id", eventId)
         .order("time", { ascending: false });
       if (error) throw error;
-      if (requestId !== analyticsRequestId || analyticsModal.classList.contains("is-hidden") || currentSession?.user?.app_metadata?.role !== "clinic_admin") return;
+      if (requestId !== analyticsRequestId || analyticsModal.classList.contains("is-hidden") || !isAdminRole(currentSession?.user?.app_metadata?.role)) return;
       renderVisitorAnalytics(eventName, data || []);
     } catch (error) {
       console.error("Could not load clinic visitor analytics:", error);
-      if (requestId !== analyticsRequestId || analyticsModal.classList.contains("is-hidden") || currentSession?.user?.app_metadata?.role !== "clinic_admin") return;
+      if (requestId !== analyticsRequestId || analyticsModal.classList.contains("is-hidden") || !isAdminRole(currentSession?.user?.app_metadata?.role)) return;
       analyticsContent.innerHTML = `<div class="analytics-error"><strong>Analytics could not be loaded.</strong><span>${escapeHtml(error?.message || "Please check the visitor analytics migration and try again.")}</span></div>`;
     }
   }
