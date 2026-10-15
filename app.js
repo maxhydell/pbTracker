@@ -211,9 +211,11 @@ async function checkDeviceWhitelist() {
     if (authorized) {
       isEditingLocked = false;
       localStorage.setItem(LS_DEVICE_VERIFIED, "1");
+      clearAccessRestrictionPopups();
       console.log("✅ Device whitelisted:", id);
     } else {
       isEditingLocked = true;
+      localStorage.removeItem(LS_DEVICE_VERIFIED);
       console.warn("⚠️ Device NOT whitelisted:", id);
       setTimeout(() => {
         showAccessRestrictionPopup("Your account is authorized, but this browser device must be approved before editing.");
@@ -371,9 +373,14 @@ function queueBackgroundStartup(pageId) {
 }
 
 
+function clearAccessRestrictionPopups() {
+  document.querySelectorAll('[id^="accessRestrictionPopup-"]').forEach(element => element.remove());
+}
+
 function showAccessRestrictionPopup(message = "Sign in with your approved PBTRKR editor email to edit tracker data.") {
   if (window.PBTRKR_USE_SUPABASE_DATA !== true) {
     isEditingLocked = false;
+    clearAccessRestrictionPopups();
     return;
   }
 

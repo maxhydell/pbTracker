@@ -1,26 +1,49 @@
 (function attachPbtrkrAuthorization(root) {
   const SUPERADMIN_USER_ID = "29184436-bd03-4239-8f8a-7f2afa10aeb6";
-  const ADMIN_ROLES = new Set(["pbtrkr_admin", "clinic_admin"]);
+  const ADMIN_ROLES = new Set(["pbtrkr_admin", "clinic_admin", "pbtrkr_superadmin", "superadmin"]);
 
   function normalizeRole(role) {
     return typeof role === "string" ? role.trim().toLowerCase() : "";
   }
 
+  function normalizeRoleList(value) {
+    if (Array.isArray(value)) {
+      return value.map(item => normalizeRole(item)).filter(Boolean);
+    }
+    return [normalizeRole(value)].filter(Boolean);
+  }
+
+  function hasAnyRole(roleSet, roleValue) {
+    return normalizeRoleList(roleValue).some(normalizedRole => roleSet.has(normalizedRole));
+  }
+
   function isAdminRole(role) {
-    return ADMIN_ROLES.has(normalizeRole(role));
+    return hasAnyRole(ADMIN_ROLES, role);
   }
 
   function isPbtrkrEditorRole(role) {
-    const normalizedRole = normalizeRole(role);
-    return normalizedRole === "pbtrkr_editor" || ADMIN_ROLES.has(normalizedRole);
+    const roles = normalizeRoleList(role);
+    return roles.some(normalizedRole => normalizedRole === "pbtrkr_editor" || ADMIN_ROLES.has(normalizedRole));
+  }
+
+  function userRoles(user) {
+    const appMetadata = user?.app_metadata || {};
+    const metadataRoles = Array.isArray(appMetadata.roles) ? appMetadata.roles : [];
+    const userRoles = Array.isArray(user?.roles) ? user.roles : [];
+    return [
+      user?.role,
+      appMetadata?.role,
+      ...metadataRoles,
+      ...userRoles
+    ];
   }
 
   function isAdminUser(user) {
-    return user?.id === SUPERADMIN_USER_ID || isAdminRole(user?.app_metadata?.role);
+    return user?.id === SUPERADMIN_USER_ID || isAdminRole(userRoles(user));
   }
 
   function isPbtrkrEditorUser(user) {
-    return user?.id === SUPERADMIN_USER_ID || isPbtrkrEditorRole(user?.app_metadata?.role);
+    return user?.id === SUPERADMIN_USER_ID || isPbtrkrEditorRole(userRoles(user));
   }
 
   function getDeviceStorageContext() {
