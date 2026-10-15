@@ -22,6 +22,14 @@
   function isEditorRole(role) {
     return root.PBTRKRAuthorization?.isPbtrkrEditorRole(normalizeRole(role)) === true;
   }
+
+  function isAdminUser(user) {
+    return root.PBTRKRAuthorization?.isAdminUser(user) === true;
+  }
+
+  function isEditorUser(user) {
+    return root.PBTRKRAuthorization?.isPbtrkrEditorUser(user) === true;
+  }
   const DAY_FORMATTER = new Intl.DateTimeFormat("en-CA", {
     timeZone: "America/New_York",
     year: "numeric",
@@ -233,8 +241,8 @@
     if (error) throw error;
 
     const { data: sessionData } = await db.auth.getSession();
-    const role = sessionData?.session?.user?.app_metadata?.role;
-    if (isEditorRole(role)) {
+    const user = sessionData?.session?.user;
+    if (isEditorUser(user)) {
       const { data: phoneRows, error: phoneError } = await db.rpc("pbtrkr_get_player_phones", {
         p_device_id: deviceId()
       });
@@ -286,8 +294,8 @@
     const db = client();
     if (isoDate === todayIso()) {
       const { data: authData } = await db.auth.getSession();
-      const role = authData?.session?.user?.app_metadata?.role;
-      if (isEditorRole(role)) {
+      const user = authData?.session?.user;
+      if (isEditorUser(user)) {
         const { error: ensureError } = await db.rpc("pbtrkr_ensure_today_sets", {
           p_match_date: isoDate,
           p_device_id: deviceId()
@@ -448,8 +456,8 @@
       case "ensureWeekInitialized": {
         const { data: authData, error } = await client().auth.getSession();
         if (error) throw error;
-        const role = authData?.session?.user?.app_metadata?.role;
-        if (!isEditorRole(role)) {
+        const user = authData?.session?.user;
+        if (!isEditorUser(user)) {
           return { success: true, created: false, reason: "read_only" };
         }
         return rpc("pbtrkr_ensure_week_initialized", {
@@ -625,6 +633,8 @@
     getPlayers,
     isAdminRole,
     isEditorRole,
+    isAdminUser,
+    isEditorUser,
     requestExistingUserMagicLink,
     magicLinkErrorMessage,
     getCanonicalPlayerKey,
