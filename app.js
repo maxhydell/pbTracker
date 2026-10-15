@@ -196,10 +196,16 @@ async function checkDeviceWhitelist() {
     const { data: authData, error: authError } = await window.supabaseClient.auth.getSession();
     const session = authData?.session;
     const role = session?.user?.app_metadata?.role;
-    if (authError || !session || !window.pbtrkrDataService?.isEditorRole(role)) {
+    if (authError || !session) {
       isEditingLocked = true;
       localStorage.removeItem(LS_DEVICE_VERIFIED);
-      setTimeout(showAccessRestrictionPopup, 500);
+      setTimeout(() => showAccessRestrictionPopup("Sign in with your provisioned PBTRKR account to continue."), 500);
+      return;
+    }
+    if (!window.pbtrkrDataService?.isEditorRole(role)) {
+      isEditingLocked = true;
+      localStorage.removeItem(LS_DEVICE_VERIFIED);
+      setTimeout(() => showAccessRestrictionPopup("This account lacks a trusted PBTRKR role. Ask an administrator to provision the user and assign app_metadata.role."), 500);
       return;
     }
 
@@ -216,7 +222,7 @@ async function checkDeviceWhitelist() {
       isEditingLocked = true;
       console.warn("⚠️ Device NOT whitelisted:", id);
       setTimeout(() => {
-        showAccessRestrictionPopup();
+        showAccessRestrictionPopup("Your account is authorized, but this browser device must be approved before editing.");
       }, 500);
     }
 
@@ -371,7 +377,7 @@ function queueBackgroundStartup(pageId) {
 }
 
 
-function showAccessRestrictionPopup() {
+function showAccessRestrictionPopup(message = "Sign in with your approved PBTRKR editor email to edit tracker data.") {
   if (window.PBTRKR_USE_SUPABASE_DATA !== true) {
     isEditingLocked = false;
     return;
@@ -398,7 +404,7 @@ function showAccessRestrictionPopup() {
       <div class="player-onboard-inner">
         <div class="player-onboard-text">
           <h3>⚠️ Editing Access Required</h3>
-          <p>Sign in with your approved PBTRKR editor email to edit tracker data.</p>
+          <p>${escapeHtml(message)}</p>
           <div style="margin-top: 15px;">
             <input id="${inputId}" type="email" autocomplete="email" placeholder="Editor email" class="onboard-input" onkeypress="if(event.key==='Enter') verifyAccessCode()" />
             <button onclick="verifyAccessCode()" style="margin-top: 10px; width: 100%; padding: 10px; background: #4fc3ff; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; color: #000;">Send secure sign-in link</button>
@@ -438,7 +444,14 @@ async function verifyAccessCode() {
     document.getElementById("accessCodeSets"),
     document.getElementById("playersAccessCode")
   ].find(input => input && String(input.value || "").trim());
-  if (!inputEl || !window.supabaseClient) return;
+  if (!inputEl) {
+    alert("Enter the email for your provisioned PBTRKR account.");
+    return;
+  }
+  if (!window.supabaseClient || !window.pbtrkrDataService) {
+    alert("The sign-in service is unavailable. Refresh the app and try again.");
+    return;
+  }
 
   const email = String(inputEl.value || "").trim().toLowerCase();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
@@ -448,17 +461,27 @@ async function verifyAccessCode() {
     return;
   }
 
-  const { error } = await window.supabaseClient.auth.signInWithOtp({
-    email,
-    options: {
-      shouldCreateUser: false,
-      emailRedirectTo: window.location.href
+  const submitButton = inputEl.parentElement?.querySelector("button");
+  const originalButtonText = submitButton?.textContent;
+  if (submitButton) {
+    submitButton.disabled = true;
+    submitButton.textContent = "Sending…";
+  }
+  let error;
+  try {
+    ({ error } = await window.pbtrkrDataService.requestExistingUserMagicLink(email, window.location.href));
+  } catch (requestError) {
+    error = requestError;
+  } finally {
+    if (submitButton) {
+      submitButton.disabled = false;
+      submitButton.textContent = originalButtonText;
     }
-  });
+  }
 
   if (error) {
     console.error("❌ Supabase sign-in link request failed:", error);
-    alert("Unable to send the sign-in link. Confirm this email is provisioned for PBTRKR editing.");
+    alert(window.pbtrkrDataService.magicLinkErrorMessage(error));
     return;
   }
 
@@ -1524,7 +1547,9 @@ async function approveCurrentDevice() {
     );
   } catch (err) {
     console.error("❌ Device approval failed:", err);
-    alert("Unable to approve this device.");
+    alert(err?.code === "42501"
+      ? "Approval was denied. Confirm your trusted app_metadata.role is pbtrkr_admin or clinic_admin and that the PBTRKR authorization migration is applied."
+      : "Unable to approve this device.");
     return false;
   }
 
@@ -3327,7 +3352,9 @@ async function finishDay() {
   updateDoneProgress(15);
   if (window.OneSignal && !localStorage.getItem("notifAsked")) {
     OneSignal.push(() => {
-      OneSignal.Notifications.requestPermission();
+      Promise.resolve().then(() => OneSignal.Notifications.requestPermission()).catch(error => {
+        console.info("Browser notification permission was not granted:", error);
+      });
     });
     localStorage.setItem("notifAsked", "1");
   }
@@ -5224,15 +5251,14 @@ async function trackVisitor() {
     console.log("🔍 Tracking visitor:", visitor);
 
     if (window.supabaseClient) {
-      const { data, error } = await window.supabaseClient
-        .from("visitors")
-        .insert([visitor])
-        .select();
+      const { error } = await window.supabaseClient
+          .from("visitors")
+          .insert([visitor]);
 
       if (error) {
         console.error("❌ Visitor tracking error:", error);
       } else {
-        console.log("✅ Visitor tracked:", data);
+        console.log("✅ Visitor tracked");
       }
     } else {
       console.warn("⚠️ Supabase client not available");

@@ -11,14 +11,12 @@
     setItem: () => undefined,
     removeItem: () => undefined
   });
-  const ADMIN_ROLES = new Set(["pbtrkr_admin", "clinic_admin"]);
-
   function isAdminRole(role) {
-    return ADMIN_ROLES.has(role);
+    return root.PBTRKRAuthorization?.isAdminRole(role) === true;
   }
 
   function isEditorRole(role) {
-    return role === "pbtrkr_editor" || isAdminRole(role);
+    return root.PBTRKRAuthorization?.isPbtrkrEditorRole(role) === true;
   }
   const DAY_FORMATTER = new Intl.DateTimeFormat("en-CA", {
     timeZone: "America/New_York",
@@ -102,6 +100,26 @@
   function toPercent(value) {
     const raw = String(value ?? "").trim();
     return num(raw);
+  }
+
+  async function requestExistingUserMagicLink(email, redirectTo) {
+    return client().auth.signInWithOtp({
+      email,
+      options: { shouldCreateUser: false, emailRedirectTo: redirectTo }
+    });
+  }
+
+  function magicLinkErrorMessage(error) {
+    const status = Number(error?.status);
+    const code = String(error?.code || "").toLowerCase();
+    const message = String(error?.message || "").toLowerCase();
+    if (status === 429 || code.includes("rate") || message.includes("rate limit") || message.includes("too many")) {
+      return "Too many sign-in link requests. Wait a few minutes before requesting another link.";
+    }
+    if (code === "user_not_found" || status === 404 || message.includes("user not found") || message.includes("signups not allowed for otp")) {
+      return "This email does not have a provisioned Supabase account. Ask a PBTRKR administrator to provision the user and assign its trusted app_metadata.role.";
+    }
+    return "Unable to send the sign-in link. Check the email address and try again later.";
   }
 
   function toLegacyPlayer(row) {
@@ -603,6 +621,8 @@
     getPlayers,
     isAdminRole,
     isEditorRole,
+    requestExistingUserMagicLink,
+    magicLinkErrorMessage,
     getCanonicalPlayerKey,
     reconcileSetSave,
     getSchedule,
