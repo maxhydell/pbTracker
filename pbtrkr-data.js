@@ -492,25 +492,35 @@
           p_rating_updates: ratingUpdates,
           p_device_id: deviceId()
         };
-        let sessionData = null;
+        const projectUrl = client().supabaseUrl || null;
+        const diagnosticPromise = Promise.resolve()
+          .then(() => client().auth?.getSession?.())
+          .then(sessionResult => {
+            console.info("PBTRKR score-save authorization context", {
+              projectUrl,
+              userId: sessionResult?.data?.session?.user?.id || null,
+              deviceId: rpcArgs.p_device_id,
+              matchDate,
+              setNumber
+            });
+          })
+          .catch(() => {
+            console.info("PBTRKR score-save authorization context", {
+              projectUrl,
+              userId: null,
+              deviceId: rpcArgs.p_device_id,
+              matchDate,
+              setNumber
+            });
+          });
         try {
-          const sessionResult = await client().auth?.getSession?.();
-          sessionData = sessionResult?.data || null;
-        } catch {
-          sessionData = null;
-        }
-        console.info("PBTRKR score-save authorization context", {
-          projectUrl: client().supabaseUrl || null,
-          userId: sessionData?.session?.user?.id || null,
-          deviceId: rpcArgs.p_device_id,
-          matchDate,
-          setNumber
-        });
-        try {
-          return await rpc("pbtrkr_save_set_full", rpcArgs, {
+          const saveResult = await rpc("pbtrkr_save_set_full", rpcArgs, {
             timeoutMs: options.timeoutMs ?? 15000
           });
+          void diagnosticPromise;
+          return saveResult;
         } catch (error) {
+          void diagnosticPromise;
           if (error.code !== "PBTRKR_SAVE_TIMEOUT") throw error;
           try {
             const reconciliation = await reconcileSetSave(matchDate, setNumber, scores);
