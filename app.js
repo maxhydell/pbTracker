@@ -27,6 +27,7 @@ const LS_MORNING_WINPCT = "pbTracker_morningWinPct";
 const LS_SCHEDULE_WEEK_ANCHOR = "pbTracker_scheduleWeekAnchor_v1";
 const LS_DEVICE_ID = "pbTracker_deviceId_v1";
 const LS_DEVICE_VERIFIED = "pbTracker_deviceVerified_v1";
+const LS_UNCERTAIN_SCORE_SAVE_PREFIX = "pbTracker_uncertainScoreSave_v1";
 
 // Power Rating Rating Constants
 const BITE_STRENGTH_K = 0.75;
@@ -1185,10 +1186,21 @@ async function saveSet(setNumber) {
   if (!btn) return;
   if (!scoreSaveStates.tryBeginSave(setNumber)) return;
   let saveSnapshot = [];
+  let saveContext = null;
+  let attemptedScores = [];
+  let priorSaveUnresolved = false;
+  let retryingUnresolvedSnapshot = false;
+  let pendingSaveAttempt = null;
   try {
     validateSetScoreInputs(setNumber);
     const scores = collectSetScoresFromDom(setNumber);
+    attemptedScores = scores.map(score => String(score || ""));
     const originalSet = (globalData.sets || []).find(set => Number(set.set) === Number(setNumber));
+    saveContext = {
+      date: originalSet?.matchDate || originalSet?.date || window.pbtrkrDataService.todayIso(),
+      setNumber: String(setNumber),
+      setId: originalSet?.id
+    };
     const previousScores = Array.isArray(originalSet?.scores) ? originalSet.scores : [];
     for (let index = 0; index < scores.length; index += 1) {
       const score = String(scores[index] || "");
@@ -1204,16 +1216,72 @@ async function saveSet(setNumber) {
     btn.innerText = "Saving...";
     btn.disabled = true;
     saveSnapshot = scoreSaveStates.snapshot(setNumber, scores);
-    if (scoreSaveStates.hasUnknown(setNumber, scores.length)) {
-      const reconciliation = await window.pbtrkrDataService.reconcileSetSave(
-        window.pbtrkrDataService.todayIso(), String(setNumber), scores
-      );
-      if (reconciliation.matches) {
-        scoreSaveStates.markSaved(saveSnapshot);
-        applyCommittedSetScores(setNumber, scores, saveSnapshot);
-        updateSetSaveIndicators(setNumber, scores.length);
-        return;
+    const pendingSave = readUncertainScoreSave(saveContext.date, setNumber);
+    pendingSaveAttempt = pendingSave;
+    if (pendingSave) {
+      priorSaveUnresolved = true;
+      let reconciliation;
+      try {
+        reconciliation = await window.pbtrkrDataService.reconcileSetSave(
+          pendingSave.date, pendingSave.setNumber, pendingSave.scores, pendingSave.setId
+        );
+      } catch (reconciliationError) {
+        const error = new Error("A previous score save is still unconfirmed. Supabase could not be checked, so this score was not retried.");
+        error.code = "PBTRKR_PRIOR_SAVE_UNCONFIRMED";
+        error.cause = reconciliationError;
+        throw error;
       }
+      if (reconciliation.matches) {
+        clearUncertainScoreSave(saveContext.date, setNumber);
+        priorSaveUnresolved = false;
+        if (sameScoreSnapshot(scores, pendingSave.scores)) {
+          scoreSaveStates.markSaved(saveSnapshot);
+          applyCommittedSetScores(setNumber, scores, saveSnapshot);
+          updateSetSaveIndicators(setNumber, scores.length);
+          scoreSaveStateBackgroundRefresh();
+          return;
+        }
+      } else if (!sameScoreSnapshot(scores, pendingSave.scores)) {
+        throw priorScoreSaveUnconfirmedError();
+      } else {
+        retryingUnresolvedSnapshot = true;
+      }
+    } else if (scoreSaveStates.hasUnknown(setNumber, scores.length)) {
+      const unknownScores = scores.map((score, gameIndex) => {
+        const state = scoreSaveStates.get(setNumber, gameIndex);
+        return state.status === "unknown" ? state.value : String(score || "");
+      });
+      priorSaveUnresolved = true;
+      saveUncertainScoreSave(saveContext, unknownScores);
+      let reconciliation;
+      try {
+        reconciliation = await window.pbtrkrDataService.reconcileSetSave(
+          saveContext.date, String(setNumber), unknownScores, originalSet?.id
+        );
+      } catch (reconciliationError) {
+        const error = new Error("A previous score save is still unconfirmed. Supabase could not be checked, so this score was not retried.");
+        error.code = "PBTRKR_PRIOR_SAVE_UNCONFIRMED";
+        error.cause = reconciliationError;
+        throw error;
+      }
+      if (reconciliation.matches) {
+        priorSaveUnresolved = false;
+        if (sameScoreSnapshot(scores, unknownScores)) {
+          scoreSaveStates.markSaved(saveSnapshot);
+          applyCommittedSetScores(setNumber, scores, saveSnapshot);
+          updateSetSaveIndicators(setNumber, scores.length);
+          scoreSaveStateBackgroundRefresh();
+          return;
+        }
+      } else if (!sameScoreSnapshot(scores, unknownScores)) {
+        throw priorScoreSaveUnconfirmedError();
+      } else {
+        retryingUnresolvedSnapshot = true;
+      }
+    }
+
+    if (pendingSave && !priorSaveUnresolved) {
+      clearUncertainScoreSave(saveContext.date, setNumber);
     }
 
     scoreSaveStates.markSaving(saveSnapshot);
@@ -1223,17 +1291,25 @@ async function saveSet(setNumber) {
       ? await buildRatingUpdatesForSet(setNumber, scores)
       : [];
 
-    const res = await callAPI({
+    const saveParams = {
       action: "saveSetFull",
       set: setNumber,
       scores: JSON.stringify(scores),
       ratingUpdates: JSON.stringify(ratingUpdates)
-    });
+    };
+    if (window.PBTRKR_USE_SUPABASE_DATA === true) {
+      saveParams.date = saveContext.date;
+      if (saveContext.setId !== undefined && saveContext.setId !== null) {
+        saveParams.setId = saveContext.setId;
+      }
+    }
+    const res = await callAPI(saveParams);
 
-    if (window.PBTRKR_USE_SUPABASE_DATA === true && res?.success !== true) {
-      throw new Error(res?.message || "Supabase did not confirm the score save.");
+    if (res?.success !== true) {
+      throw new Error(res?.message || res?.error || "The server did not confirm the score save.");
     }
 
+    clearUncertainScoreSave(saveContext.date, setNumber);
     scoreSaveStates.markSaved(saveSnapshot);
     applyCommittedSetScores(setNumber, scores, saveSnapshot, ratingUpdates);
     updateSetSaveIndicators(setNumber, scores.length);
@@ -1250,15 +1326,38 @@ async function saveSet(setNumber) {
   } catch (e) {
     console.error(e);
     if (saveSnapshot.length) {
-      const wasUnknown = saveSnapshot.some(item =>
-        scoreSaveStates.get(setNumber, item.gameIndex).status === "unknown"
-      );
-      if (e.code === "PBTRKR_SAVE_OUTCOME_UNKNOWN" || e.code === "PBTRKR_RECONCILE_TIMEOUT" || wasUnknown) {
+      if (e.code === "PBTRKR_PRIOR_SAVE_UNCONFIRMED") {
+        saveSnapshot.forEach(item => updateScoreSaveIndicator(setNumber, item.gameIndex));
+      } else if (retryingUnresolvedSnapshot) {
         scoreSaveStates.markUnknown(saveSnapshot);
+        if (!pendingSaveAttempt && saveContext) {
+          try {
+            saveUncertainScoreSave(saveContext, attemptedScores);
+          } catch (storageError) {
+            console.error("Unable to store score-save retry protection:", storageError);
+            e = new Error("The save outcome is unknown, and the app could not store retry protection. Verify the saved score before retrying.");
+          }
+        }
+        saveSnapshot.forEach(item => updateScoreSaveIndicator(setNumber, item.gameIndex));
       } else {
-        scoreSaveStates.markError(saveSnapshot);
+        const wasUnknown = saveSnapshot.some(item =>
+          scoreSaveStates.get(setNumber, item.gameIndex).status === "unknown"
+        );
+        if (e.code === "PBTRKR_SAVE_OUTCOME_UNKNOWN" || e.code === "PBTRKR_RECONCILE_TIMEOUT" || wasUnknown) {
+          scoreSaveStates.markUnknown(saveSnapshot);
+          if (saveContext) {
+            try {
+              saveUncertainScoreSave(saveContext, attemptedScores);
+            } catch (storageError) {
+              console.error("Unable to store score-save retry protection:", storageError);
+              e = new Error("The save outcome is unknown, and the app could not store retry protection. Verify the saved score before retrying.");
+            }
+          }
+        } else {
+          scoreSaveStates.markError(saveSnapshot);
+        }
+        saveSnapshot.forEach(item => updateScoreSaveIndicator(setNumber, item.gameIndex));
       }
-      saveSnapshot.forEach(item => updateScoreSaveIndicator(setNumber, item.gameIndex));
     }
     alert(e.message || "Unable to save set scores.");
   } finally {
@@ -1269,6 +1368,57 @@ async function saveSet(setNumber) {
       updateSetSaveIndicators(setNumber, saveSnapshot.length);
     }
   }
+}
+
+function uncertainScoreSaveKey(date, setNumber) {
+  const dateKey = window.pbtrkrDataService?.dateToIso(date);
+  if (!dateKey) throw new Error("Cannot protect a score save with an invalid match date.");
+  return `${LS_UNCERTAIN_SCORE_SAVE_PREFIX}_${dateKey}_${String(setNumber)}`;
+}
+
+function readUncertainScoreSave(date, setNumber) {
+  const key = uncertainScoreSaveKey(date, setNumber);
+  const raw = localStorage.getItem(key);
+  if (!raw) return null;
+  let pending;
+  try {
+    pending = JSON.parse(raw);
+  } catch (error) {
+    throw new Error("A previous score save needs manual verification because its local retry record is unreadable.");
+  }
+  if (!pending || !Array.isArray(pending.scores) || !pending.date || !pending.setNumber) {
+    throw new Error("A previous score save needs manual verification because its local retry record is incomplete.");
+  }
+  if (window.pbtrkrDataService.dateToIso(pending.date) !== window.pbtrkrDataService.dateToIso(date)
+    || String(pending.setNumber) !== String(setNumber)) {
+    throw new Error("A previous score save needs manual verification because its local retry record does not match this set.");
+  }
+  return pending;
+}
+
+function saveUncertainScoreSave(context, scores) {
+  const key = uncertainScoreSaveKey(context.date, context.setNumber);
+  localStorage.setItem(key, JSON.stringify({
+    date: window.pbtrkrDataService.dateToIso(context.date),
+    setNumber: context.setNumber,
+    setId: context.setId ?? null,
+    scores: scores.map(score => String(score || ""))
+  }));
+}
+
+function clearUncertainScoreSave(date, setNumber) {
+  localStorage.removeItem(uncertainScoreSaveKey(date, setNumber));
+}
+
+function sameScoreSnapshot(left, right) {
+  return JSON.stringify(left.map(score => String(score || "")))
+    === JSON.stringify(right.map(score => String(score || "")));
+}
+
+function priorScoreSaveUnconfirmedError() {
+  const error = new Error("A previous score save is still unconfirmed. The requested scores were not retried; verify the saved score before changing or retrying it.");
+  error.code = "PBTRKR_PRIOR_SAVE_UNCONFIRMED";
+  return error;
 }
 
 function applyCommittedSetScores(setNumber, scores, saveSnapshot, ratingUpdates = []) {
@@ -2260,6 +2410,10 @@ function effectiveScheduleWeekMonday() {
   return isWeekend() ? nextMondayAfterWeekend() : mondayOfWeekContaining();
 }
 
+function localScheduleDateKey(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
 function maybeRollScheduleLocalWeek() {
   const mon = effectiveScheduleWeekMonday();
   const anchorKey = mon.toISOString().slice(0, 10);
@@ -2283,13 +2437,14 @@ function getBookCourtMap() {
 
 function isBookCourtDone(date) {
   const map = getBookCourtMap();
-  const key = new Date(date).toISOString().slice(0, 10);
+  const key = window.pbtrkrDataService?.dateToIso(date);
   return Boolean(map[key]);
 }
 
 function setBookCourtDone(date) {
   const map = getBookCourtMap();
-  const key = new Date(date).toISOString().slice(0, 10);
+  const key = window.pbtrkrDataService?.dateToIso(date);
+  if (!key) return;
   map[key] = true;
   localStorage.setItem(BOOK_COURT_STORAGE_KEY, JSON.stringify(map));
 }
@@ -2352,7 +2507,6 @@ async function loadSchedule() {
     await callAPI({ action: "ensureWeekInitialized" });
 
     let data = await callAPI({ action: "getSchedule" }, { force: true });
-    globalData.schedule = data;
 
     console.log("📦 schedule data:", data);
     console.count("loadSchedule fired");
@@ -2366,23 +2520,14 @@ async function loadSchedule() {
 const weekStart = new Date(effectiveScheduleWeekMonday());
 weekStart.setHours(0,0,0,0);
 
-data = Array.from({ length: 5 }, (_, i) => {
+const weekDates = Array.from({ length: 5 }, (_, i) => {
   const target = new Date(weekStart);
   target.setDate(weekStart.getDate() + i);
   target.setHours(0,0,0,0);
-
-  const match = data.find(row => {
-    const rd = new Date(row.date + "T12:00:00");
-    rd.setHours(0,0,0,0);
-    return rd.getTime() === target.getTime();
-  });
-
-  return match || {
-    date: target.toISOString(),
-    players: ["", "", "", ""],
-    status: [0, 0, 0, 0]
-  };
+  return localScheduleDateKey(target);
 });
+data = window.pbtrkrDataService.normalizeScheduleRows(data, weekDates);
+globalData.schedule = data;
 
     console.log("📊 SCHEDULE LENGTH:", data.length);
 
@@ -2420,8 +2565,9 @@ data = Array.from({ length: 5 }, (_, i) => {
       data = Array.from({ length: 5 }, (_, i) => {
         const d = new Date(weekStart);
         d.setDate(weekStart.getDate() + i);
+        const date = localScheduleDateKey(d);
         return {
-          date: d.toISOString(),
+          date,
           players: ["", "", "", ""],
           status: [0, 0, 0, 0]
         };
@@ -2445,11 +2591,10 @@ data = Array.from({ length: 5 }, (_, i) => {
         topDayIndex = i;
       }
     });
-
     container.innerHTML = data.map((row, i) => {
       console.log("Row:", row);
-      const d = new Date(row.date + "T12:00:00");
-      const dayName = d.toLocaleDateString("en-US",{weekday:"long"});
+      console.log("Row:", row);
+      const dayName = window.pbtrkrDataService.scheduleWeekday(row.date) || "";
 
       if (!data.length) {
         container.innerHTML = "No schedule found";

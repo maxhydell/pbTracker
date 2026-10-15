@@ -41,21 +41,51 @@
     return DAY_FORMATTER.format(new Date());
   }
 
+  function isoDate(yearText, monthText, dayText) {
+    const year = Number(yearText);
+    const month = Number(monthText);
+    const day = Number(dayText);
+    if (!Number.isInteger(year) || year < 1 || year > 9999
+      || !Number.isInteger(month) || month < 1 || month > 12
+      || !Number.isInteger(day) || day < 1 || day > 31) {
+      return null;
+    }
+
+    const parsed = new Date(0);
+    parsed.setUTCHours(0, 0, 0, 0);
+    parsed.setUTCFullYear(year, month - 1, day);
+    if (parsed.getUTCFullYear() !== year
+      || parsed.getUTCMonth() !== month - 1
+      || parsed.getUTCDate() !== day) {
+      return null;
+    }
+    return `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  }
+
   function dateToIso(value) {
     const raw = String(value || "").trim();
     if (!raw) return null;
-    if (/^\d{4}-\d{2}-\d{2}/.test(raw)) return raw.slice(0, 10);
 
-    const slashDate = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?$/);
-    if (slashDate) {
-      const [, monthText, dayText, year] = slashDate;
-      const month = Number(monthText);
-      const day = Number(dayText);
-      const parsed = new Date(Date.UTC(Number(year), month - 1, day));
-      if (parsed.getUTCFullYear() !== Number(year) || parsed.getUTCMonth() !== month - 1 || parsed.getUTCDate() !== day) {
+    const isoDateMatch = raw.match(/^(\d{4})-(\d{2})-(\d{2})(?:$|[Tt](\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,9})?)?(?:([Zz])|([+-])(\d{2}):?(\d{2}))?$)/);
+    if (isoDateMatch) {
+      const [, year, month, day, hour, minute, second, , , offsetHour, offsetMinute] = isoDateMatch;
+      if (hour !== undefined
+        && (Number(hour) > 23 || Number(minute) > 59 || Number(second || 0) > 59
+          || Number(offsetHour || 0) > 14 || Number(offsetMinute || 0) > 59
+          || (Number(offsetHour || 0) === 14 && Number(offsetMinute || 0) !== 0))) {
         return null;
       }
-      return `${year}-${monthText.padStart(2, "0")}-${dayText.padStart(2, "0")}`;
+      return isoDate(year, month, day);
+    }
+
+    const slashDate = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
+    if (slashDate) {
+      const [, month, day, year, hour, minute, second] = slashDate;
+      if (hour !== undefined
+        && (Number(hour) > 23 || Number(minute) > 59 || Number(second || 0) > 59)) {
+        return null;
+      }
+      return isoDate(year, month, day);
     }
 
     const explicitMonthDayYear = raw.match(/^(\d{1,2})-([A-Za-z]{3})-(\d{4})$/i);
@@ -67,10 +97,10 @@
       };
       const month = monthMap[String(monthText).toLowerCase()];
       if (!month) return null;
-      return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+      return isoDate(year, month, day);
     }
 
-    const monthNameDate = raw.match(/^([A-Za-z]{3})\s+(\d{1,2})\s+(\d{4})$/i);
+    const monthNameDate = raw.match(/^(?:[A-Za-z]{3}\s+)?([A-Za-z]{3})\s+(\d{1,2})\s+(\d{4})$/i);
     if (monthNameDate) {
       const [, monthText, day, year] = monthNameDate;
       const monthMap = {
@@ -79,21 +109,61 @@
       };
       const month = monthMap[String(monthText).toLowerCase()];
       if (!month) return null;
-      return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+      return isoDate(year, month, day);
     }
 
     if (/^(\d{1,2})-[A-Za-z]{3}$/i.test(raw) || /^[A-Za-z]{3}\s+\d{1,2}$/.test(raw)) {
       return null;
     }
 
-    const parsed = new Date(raw);
-    if (Number.isNaN(parsed.getTime())) return null;
-    return DAY_FORMATTER.format(parsed);
+    return null;
   }
 
   function legacyDate(isoDate) {
     const [year, month, day] = isoDate.split("-").map(Number);
     return `${month}/${day}/${year}`;
+  }
+
+  function scheduleWeekday(value) {
+    const date = dateToIso(value);
+    if (!date) return null;
+    return new Intl.DateTimeFormat("en-US", {
+      weekday: "long",
+      timeZone: "America/New_York"
+    }).format(new Date(`${date}T12:00:00Z`));
+  }
+
+  function scheduleSlots(values, rawRow, firstColumn) {
+    const slots = Array.isArray(values) && values.length === 4
+      ? values.map(value => String(value ?? ""))
+      : ["", "", "", ""];
+    const rawSlots = [0, 1, 2, 3].map(index => String(rawRow?.[`c${firstColumn + index}`] ?? ""));
+    return slots.some(value => value.trim()) || !rawSlots.some(value => value.trim())
+      ? slots
+      : rawSlots;
+  }
+
+  function normalizeScheduleRows(rows, dates) {
+    const firstByDate = new Map();
+    for (const row of rows || []) {
+      const date = dateToIso(row?.schedule_date || row?.date || row?.date_raw);
+      if (!date || firstByDate.has(date)) continue;
+      const rawRow = row.raw_row && typeof row.raw_row === "object" ? row.raw_row : {};
+      firstByDate.set(date, {
+        date,
+        id: row.id,
+        players: scheduleSlots(row.players, rawRow, 3),
+        status: scheduleSlots(row.statuses || row.status, rawRow, 8).map(value => Number(value) || 0)
+      });
+    }
+    return (dates || []).map(value => {
+      const date = dateToIso(value);
+      return firstByDate.get(date) || {
+        date,
+        players: ["", "", "", ""],
+        status: [0, 0, 0, 0]
+      };
+    });
   }
 
   function deviceId() {
@@ -273,18 +343,7 @@
       .in("schedule_date", dates)
       .order("id", { ascending: true });
     if (error) throw error;
-    const firstByDate = new Map();
-    for (const row of data || []) {
-      if (!firstByDate.has(row.schedule_date)) firstByDate.set(row.schedule_date, row);
-    }
-    return dates.map(date => {
-      const row = firstByDate.get(date);
-      return {
-        date: legacyDate(date),
-        players: row?.players || ["", "", "", ""],
-        status: (row?.statuses || ["", "", "", ""]).map(value => Number(value) || 0)
-      };
-    });
+    return normalizeScheduleRows(data, dates);
   }
 
   async function getSets(date = todayIso()) {
@@ -352,12 +411,41 @@
   }
 
   async function rpc(name, args, options = {}) {
-    const response = await awaitSupabaseRequest(
-      client().rpc(name, args), options.timeoutMs, "PBTRKR_SAVE_TIMEOUT"
-    );
-    const { data, error } = response;
-    if (error) throw error;
-    return data;
+    const startedAt = Date.now();
+    try {
+      const response = await awaitSupabaseRequest(
+        client().rpc(name, args), options.timeoutMs, "PBTRKR_SAVE_TIMEOUT"
+      );
+      const { data, error } = response;
+      if (error) throw error;
+      if (name === "pbtrkr_save_set_full") {
+        console.info("PBTRKR score-save RPC timing", {
+          durationMs: Date.now() - startedAt,
+          outcome: "confirmed"
+        });
+      }
+      return data;
+    } catch (error) {
+      if (name === "pbtrkr_save_set_full") {
+        console.warn("PBTRKR score-save RPC timing", {
+          durationMs: Date.now() - startedAt,
+          outcome: error?.code === "PBTRKR_SAVE_TIMEOUT" ? "timeout" : "error",
+          errorCode: safeErrorCode(error),
+          httpStatus: safeHttpStatus(error)
+        });
+      }
+      throw error;
+    }
+  }
+
+  function safeErrorCode(error) {
+    const code = String(error?.code || "");
+    return /^[A-Za-z0-9_-]{1,32}$/.test(code) ? code : "unavailable";
+  }
+
+  function safeHttpStatus(error) {
+    const status = Number(error?.status);
+    return Number.isInteger(status) && status >= 100 && status <= 599 ? status : null;
   }
 
   async function awaitSupabaseRequest(query, timeoutMs, errorCode) {
@@ -388,19 +476,48 @@
     return (scores || []).map(value => String(value ?? ""));
   }
 
-  async function reconcileSetSave(matchDate, setNumber, expectedScores) {
-    const response = await awaitSupabaseRequest(client().from("pbtrkr_sets")
-      .select("id,match_date,set_number,game_scores")
-      .eq("match_date", matchDate)
-      .eq("set_number", String(setNumber))
-      .limit(1), 8000, "PBTRKR_RECONCILE_TIMEOUT");
-    const { data, error } = response;
-    if (error) throw error;
-    const current = data?.[0] || null;
+  async function reconcileSetSave(matchDate, setNumber, expectedScores, expectedSetId) {
+    const normalizedDate = dateToIso(matchDate);
+    if (!normalizedDate) throw new Error("Cannot reconcile a score save with an invalid match date");
+    const startedAt = Date.now();
+    let data;
+    try {
+      const response = await awaitSupabaseRequest(client().from("pbtrkr_sets")
+        .select("id,match_date,set_number,game_scores")
+        .eq("match_date", normalizedDate)
+        .eq("set_number", String(setNumber))
+        .order("id", { ascending: true })
+        .limit(2), 8000, "PBTRKR_RECONCILE_TIMEOUT");
+      if (response.error) throw response.error;
+      data = response.data;
+    } catch (error) {
+      console.warn("PBTRKR score-save reconciliation", {
+        durationMs: Date.now() - startedAt,
+        outcome: error?.code === "PBTRKR_RECONCILE_TIMEOUT" ? "timeout" : "error",
+        errorCode: safeErrorCode(error),
+        httpStatus: safeHttpStatus(error)
+      });
+      throw error;
+    }
+    const candidates = data || [];
+    const first = candidates[0] || null;
+    const current = expectedSetId === undefined || expectedSetId === null
+      ? first
+      : candidates.find(row => String(row.id) === String(expectedSetId)) || null;
     const persistedScores = normalizedScores(current?.game_scores);
     const requestedScores = normalizedScores(expectedScores);
+    const intendedRpcRow = Boolean(current) && String(current.id) === String(first?.id);
+    const matches = intendedRpcRow
+      && JSON.stringify(persistedScores) === JSON.stringify(requestedScores);
+    console.info("PBTRKR score-save reconciliation", {
+      durationMs: Date.now() - startedAt,
+      candidateCount: candidates.length,
+      duplicateRowsDetected: candidates.length > 1,
+      intendedRpcRow,
+      outcome: matches ? "confirmed" : "not-confirmed"
+    });
     return {
-      matches: Boolean(current) && JSON.stringify(persistedScores) === JSON.stringify(requestedScores),
+      matches,
       set: current,
       persistedScores
     };
@@ -482,8 +599,10 @@
           ...update,
           player_key: update.player_key || String(update.player_name || "").trim().toLowerCase()
         }));
-        const matchDate = todayIso();
+        const matchDate = dateToIso(params.date || todayIso());
+        if (!matchDate) throw new Error("Cannot save a set with an invalid match date");
         const setNumber = String(params.set);
+        const setId = params.setId;
         const scores = JSON.parse(params.scores || "[]");
         const rpcArgs = {
           p_match_date: matchDate,
@@ -492,38 +611,15 @@
           p_rating_updates: ratingUpdates,
           p_device_id: deviceId()
         };
-        const projectUrl = client().supabaseUrl || null;
-        const diagnosticPromise = Promise.resolve()
-          .then(() => client().auth?.getSession?.())
-          .then(sessionResult => {
-            console.info("PBTRKR score-save authorization context", {
-              projectUrl,
-              userId: sessionResult?.data?.session?.user?.id || null,
-              deviceId: rpcArgs.p_device_id,
-              matchDate,
-              setNumber
-            });
-          })
-          .catch(() => {
-            console.info("PBTRKR score-save authorization context", {
-              projectUrl,
-              userId: null,
-              deviceId: rpcArgs.p_device_id,
-              matchDate,
-              setNumber
-            });
-          });
         try {
           const saveResult = await rpc("pbtrkr_save_set_full", rpcArgs, {
             timeoutMs: options.timeoutMs ?? 15000
           });
-          void diagnosticPromise;
           return saveResult;
         } catch (error) {
-          void diagnosticPromise;
           if (error.code !== "PBTRKR_SAVE_TIMEOUT") throw error;
           try {
-            const reconciliation = await reconcileSetSave(matchDate, setNumber, scores);
+            const reconciliation = await reconcileSetSave(matchDate, setNumber, scores, setId);
             if (reconciliation.matches) {
               return {
                 success: true,
@@ -651,6 +747,8 @@
     todayIso,
     deviceId,
     legacyDate,
+    scheduleWeekday,
+    normalizeScheduleRows,
     dayWindow,
     getPlayers,
     isAdminRole,
