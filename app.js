@@ -203,7 +203,11 @@ function getOrCreateDeviceId() {
   const player = getPlayerFromURL() || getPreferredPlayerFromStorage() || localStorage.getItem("player");
   const id = window.PBTRKRAuthorization?.getOrCreateDeviceId();
   if (!id) throw new Error("PBTRKR device identity helper is unavailable");
-  console.log("📱 Using shared device ID for", player || "guest", ":", id);
+  console.info("pbtrkr.device.identity.ready", {
+    event: "pbtrkr.device.identity.ready",
+    identityType: "browser_device_id",
+    playerContextPresent: Boolean(player)
+  });
   deviceId = id;
   return id;
 }
@@ -252,18 +256,38 @@ async function checkDeviceWhitelist() {
       setEditingLockState(false);
       localStorage.setItem(LS_DEVICE_VERIFIED, "1");
       clearAccessRestrictionPopups();
-      console.log("✅ Device whitelisted:", id);
+      console.info("pbtrkr.device.authorization.checked", {
+        event: "pbtrkr.device.authorization.checked",
+        identityType: "browser_device_id",
+        authorizationSource: "pbtrkr_device_is_whitelisted",
+        requiredRole: "pbtrkr_editor_or_admin",
+        requiredRecords: ["device_whitelist", "pbtrkr_device_authorizations"],
+        outcome: "authorized"
+      });
     } else {
       setEditingLockState(true);
       localStorage.removeItem(LS_DEVICE_VERIFIED);
-      console.warn("⚠️ Device NOT whitelisted:", id);
+      console.warn("pbtrkr.device.authorization.checked", {
+        event: "pbtrkr.device.authorization.checked",
+        identityType: "browser_device_id",
+        authorizationSource: "pbtrkr_device_is_whitelisted",
+        requiredRole: "pbtrkr_editor_or_admin",
+        requiredRecords: ["device_whitelist", "pbtrkr_device_authorizations"],
+        outcome: "unauthorized"
+      });
       setTimeout(() => {
         showAccessRestrictionPopup("Your account is authorized, but this browser device must be approved before editing.");
       }, 500);
     }
 
   } catch (err) {
-    console.error("❌ Device check error:", err);
+    console.error("pbtrkr.device.authorization.failed", {
+      event: "pbtrkr.device.authorization.failed",
+      errorName: /^[A-Za-z][A-Za-z0-9]{0,39}$/.test(String(err?.name || ""))
+        ? err.name
+        : "Error",
+      ...safeSaveErrorLogDetails(err)
+    });
     setEditingLockState(true);
   }
 }
@@ -345,8 +369,12 @@ function showDataUnavailable(error) {
     banner.hidden = false;
   }
   console.error("PBTRKR live data unavailable", {
+    event: "pbtrkr.live_data.unavailable",
     code: String(error?.code || "unavailable").slice(0, 32),
-    status: Number.isInteger(Number(error?.status)) ? Number(error.status) : null
+    status: Number.isInteger(Number(error?.status)) ? Number(error.status) : null,
+    errorName: /^[A-Za-z][A-Za-z0-9]{0,39}$/.test(String(error?.name || ""))
+      ? error.name
+      : "Error"
   });
 }
 
@@ -599,7 +627,12 @@ function lockEditingIfNeeded() {
   }
   if (!isEditingLocked) return;
 
-  console.log("🔒 LOCKING EDITING - IP NOT WHITELISTED");
+  console.info("pbtrkr.editing.locked", {
+    event: "pbtrkr.editing.locked",
+    reason: "editing_lock_active",
+    liveDataUnavailable: dataUnavailable,
+    authorizationIdentity: "authenticated_user_and_browser_device_id"
+  });
 
   // Lock all editing controls
   const setInputs = document.querySelectorAll(".score-editable input, .player-input, .match-card input");
@@ -1071,6 +1104,15 @@ async function callAPI(params, options = {}) {
         timestamp: new Date().toISOString(),
         ...safeSaveErrorLogDetails(err)
       });
+    } else if (window.PBTRKR_USE_SUPABASE_DATA === true) {
+      console.error("pbtrkr.live_data.request.failed", {
+        event: "pbtrkr.live_data.request.failed",
+        timestamp: new Date().toISOString(),
+        action: String(params.action || "unknown").slice(0, 48),
+        stage: "data_service_call",
+        transportFailure: err instanceof TypeError,
+        ...safeSaveErrorLogDetails(err)
+      });
     } else {
       console.error("API ERROR:", err);
     }
@@ -1213,12 +1255,6 @@ function renderSetsInto(container, data, opts = {}) {
 
     container.appendChild(setWrapper);
   });
-}
-
-function formatPredictionDelta(value, digits) {
-  const delta = Number(value);
-  if (!Number.isFinite(delta)) return "Unavailable";
-  return `${delta > 0 ? "+" : ""}${delta.toFixed(digits)}`;
 }
 
 async function loadTodaySetsAll() {
@@ -1385,82 +1421,27 @@ async function saveSet(setNumber) {
       saveButtonDisabled: true
     });
     saveSnapshot = scoreSaveStates.snapshot(setNumber, scores);
-    const submitWithRatingConflictRecovery = async (
-      context,
-      requestedScores,
-      expectedScores,
-      ratingUpdates,
-      requestId,
-      source
-    ) => {
-      try {
-        return await submitScoreSave(
-          context, requestedScores, expectedScores, ratingUpdates, requestId, source
-        );
-      } catch (error) {
-        if (error?.code !== "40001"
-          || !String(error.message || "").includes("Player ratings changed during score save; reload and retry")) {
-          throw error;
-        }
-
-        console.warn("save.rating_conflict.refresh_started", {
-          saveRequestId: requestId,
-          event: "save.rating_conflict.refresh_started",
-          timestamp: new Date().toISOString(),
-          date: window.pbtrkrDataService.dateToIso(context.date),
-          setNumber: String(context.setNumber),
-          retryCount: 1
-        });
-        const refreshedRatingUpdates = await buildRatingUpdatesForSet(
-          context.setNumber,
-          requestedScores,
-          true
-        );
-        attemptedRatingUpdates = refreshedRatingUpdates;
-        uncertainSaveRecord = {
-          date: context.date,
-          setNumber: String(context.setNumber),
-          setId: context.setId ?? null,
-          scores: requestedScores.map(score => String(score || "")),
-          expectedScores: expectedScores.map(score => score === undefined ? null : score),
-          ratingUpdates: refreshedRatingUpdates,
-          saveRequestId: requestId
-        };
-        saveUncertainScoreSave(
-          context,
-          requestedScores,
-          requestId,
-          refreshedRatingUpdates,
-          "in_flight",
-          expectedScores
-        );
-        saveAttemptPersisted = true;
-        console.info("save.rating_conflict.refresh_completed", {
-          saveRequestId: requestId,
-          event: "save.rating_conflict.refresh_completed",
-          timestamp: new Date().toISOString(),
-          date: window.pbtrkrDataService.dateToIso(context.date),
-          setNumber: String(context.setNumber),
-          ratingUpdateCount: refreshedRatingUpdates.length,
-          retryCount: 1,
-          sameSaveRequestId: true
-        });
-        return submitScoreSave(
-          context,
-          requestedScores,
-          expectedScores,
-          refreshedRatingUpdates,
-          requestId,
-          `${source}.rating_conflict_retry`
-        );
-      }
-    };
     let pendingSave = readUncertainScoreSave(saveContext.date, setNumber);
     if (pendingSave) {
       uncertainSaveRecord = pendingSave;
       const previousRequestId = pendingSave.saveRequestId;
-      saveRequestId = previousRequestId;
       const resolutionStartedAt = Date.now();
+      if (pendingSave.setId != null
+        && originalSet?.id != null
+        && String(pendingSave.setId) !== String(originalSet.id)) {
+        console.warn("save.recovery.identity_conflict", {
+          saveRequestId,
+          event: "save.recovery.identity_conflict",
+          timestamp: new Date().toISOString(),
+          pendingSaveRequestId: previousRequestId,
+          pendingSetId: pendingSave.setId,
+          clickedSetId: originalSet.id,
+          date: saveDate,
+          setNumber: String(setNumber),
+          outcome: "unresolved"
+        });
+        throw priorScoreSaveUnconfirmedError();
+      }
       let resolution;
       try {
         resolution = await resolvePendingScoreSave(pendingSave);
@@ -1482,21 +1463,24 @@ async function saveSet(setNumber) {
         reconciliationOutcome = "confirmed_by_request_ledger";
         rpcOutcome = "prior_request_confirmed";
         lastCompletedStage = "save.reconciliation.completed";
-        finalOutcome = "confirmed";
-        if (sameScoreSnapshot(scores, pendingSave.scores)
-          && sameScoreSnapshot(
-            resolution.persisted.persistedScoresRaw,
-            pendingSave.scores
-          )) {
+        const persistedMatchesPending = sameScoreSnapshot(
+          resolution.persisted.persistedScoresRaw,
+          pendingSave.scores
+        );
+        const currentDraftMatchesPending = sameScoreSnapshot(scores, pendingSave.scores);
+        finalOutcome = persistedMatchesPending && currentDraftMatchesPending
+          ? "confirmed"
+          : "confirmed_but_set_changed";
+        if (persistedMatchesPending && currentDraftMatchesPending) {
           scoreSaveStates.markSaved(saveSnapshot);
           updateSetSaveIndicators(setNumber, scores.length);
         } else {
           scoreSaveStates.markError(saveSnapshot);
           saveSnapshot.forEach(item => updateScoreSaveIndicator(setNumber, item.gameIndex));
-          alert("The previous save is confirmed. Your newer edits were not submitted; review them and click Save again.");
+          alert("The previous save was committed, but the current saved scores or your draft differ. Review the set before saving again.");
         }
         console.info("save.recovery.request_resolved", {
-          saveRequestId,
+          saveRequestId: previousRequestId,
           event: "save.recovery.request_resolved",
           timestamp: new Date().toISOString(),
           durationMs: Date.now() - resolutionStartedAt,
@@ -1504,16 +1488,23 @@ async function saveSet(setNumber) {
           setNumber: String(setNumber),
           setId: resolution.persisted.set.id,
           outcome: "committed",
-          fingerprintMatched: true
+          fingerprintMatched: true,
+          fieldsMatched: {
+            persistedScoreSnapshot: persistedMatchesPending,
+            currentDraftSnapshot: currentDraftMatchesPending
+          }
         });
         scoreSaveStateBackgroundRefresh();
         return;
       }
 
+      const pendingScoreSnapshotMatches = sameScoreSnapshot(
+        resolution.persisted.persistedScoresRaw,
+        pendingSave.scores
+      );
       clearUncertainScoreSave(saveContext.date, setNumber);
       uncertainSaveRecord = null;
       pendingSave = null;
-      saveRequestId = `save-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
       saveContext.setId = resolution.persisted.set.id;
       attemptedExpectedScores = resolution.persisted.persistedScoresRaw.map(
         score => String(score ?? "")
@@ -1528,7 +1519,10 @@ async function saveSet(setNumber) {
         setId: saveContext.setId,
         outcome: "not_committed",
         previousRequestId,
-        nextRequestIdCreated: true
+        newSaveRequestId: saveRequestId,
+        fieldsMatched: {
+          oldRequestedScoreSnapshot: pendingScoreSnapshotMatches
+        }
       });
     }
 
@@ -1549,7 +1543,7 @@ async function saveSet(setNumber) {
     saveAttemptPersisted = true;
     rpcOutcome = "started";
     lastCompletedStage = "save.rpc.started";
-    const res = await submitWithRatingConflictRecovery(
+    const res = await submitScoreSave(
       saveContext,
       scores,
       attemptedExpectedScores,
@@ -2441,35 +2435,6 @@ function calculatePredictedScore(teamAAvg, teamBAvg, baseWinPts = 11) {
     teamA: strongerIsA ? strongScore : weakScore,
     teamB: strongerIsA ? weakScore : strongScore
   };
-}
-
-async function getPredictedScoresForDay(setsData) {
-  // Get all today's sets and calculate predicted scores for unplayed games
-  if (!Array.isArray(setsData) || !playersCache) return {};
-  
-  const predictions = {};
-  
-  for (const set of setsData) {
-    const prediction = await window.PBTRKRPredictions.buildSetPrediction(
-      set,
-      playersCache,
-      getSetScores(set),
-      calculatePredictedScore,
-      calculateSetRatings
-    );
-    if (!prediction.available) continue;
-
-    const scores = getSetScores(set);
-    scores.forEach((score, idx) => {
-      const key = `${set.set}-${idx}`;
-      if (!/^\d+-\d+$/.test(String(score || "").trim())) {
-        // No score yet, generate prediction
-        predictions[key] = prediction.forecastScore;
-      }
-    });
-  }
-  
-  return predictions;
 }
 
 function unlockGame(set, gameIndex) {

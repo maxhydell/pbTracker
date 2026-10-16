@@ -428,23 +428,82 @@
   async function getSets(date = todayIso()) {
     const isoDate = dateToIso(date) || todayIso();
     const db = client();
-    if (isoDate === todayIso()) {
-      const { data: authData } = await db.auth.getSession();
-      const user = authData?.session?.user;
-      if (isEditorUser(user)) {
-        await retryTransientRequest(() => db.rpc("pbtrkr_ensure_today_sets", {
-          p_match_date: isoDate,
-          p_device_id: deviceId()
-        }));
+    const startedAt = Date.now();
+    let stage = "session_check";
+    try {
+      if (isoDate === todayIso()) {
+        const { data: authData, error: authError } = await db.auth.getSession();
+        if (authError) throw authError;
+        const user = authData?.session?.user;
+        if (isEditorUser(user)) {
+          stage = "ensure_today_sets";
+          try {
+            const { data: ensureResult } = await retryTransientRequest(() => db.rpc(
+              "pbtrkr_ensure_today_sets",
+              {
+                p_match_date: isoDate,
+                p_device_id: deviceId()
+              }
+            ));
+            if (ensureResult?.reason === "read_only") {
+              console.info("pbtrkr.sets.ensure.skipped", {
+                event: "pbtrkr.sets.ensure.skipped",
+                timestamp: new Date().toISOString(),
+                date: isoDate,
+                reason: "device_not_authorized",
+                readContinues: true
+              });
+            }
+          } catch (error) {
+            if (String(error?.code || "") !== "42501") throw error;
+            console.warn("pbtrkr.sets.ensure.skipped", {
+              event: "pbtrkr.sets.ensure.skipped",
+              timestamp: new Date().toISOString(),
+              date: isoDate,
+              reason: "device_not_authorized",
+              errorCode: "42501",
+              readContinues: true
+            });
+          }
+        }
       }
+
+      stage = "sets_select";
+      const { data, error } = await retryTransientRequest(() => db
+        .from("pbtrkr_sets")
+        .select("id,match_date,date_raw,set_number,team_a,team_b,game_scores,scores_resolved")
+        .eq("match_date", isoDate)
+        .order("set_number", { ascending: true })
+        .order("id", { ascending: true }));
+      if (error) throw error;
+      const sets = (data || []).map(toLegacySet);
+      console.info("pbtrkr.sets.read.completed", {
+        event: "pbtrkr.sets.read.completed",
+        timestamp: new Date().toISOString(),
+        durationMs: Date.now() - startedAt,
+        action: "getTodaySets",
+        table: "pbtrkr_sets",
+        date: isoDate,
+        rowCount: sets.length
+      });
+      return sets;
+    } catch (error) {
+      console.error("pbtrkr.sets.read.failed", {
+        event: "pbtrkr.sets.read.failed",
+        timestamp: new Date().toISOString(),
+        durationMs: Date.now() - startedAt,
+        action: "getTodaySets",
+        table: stage === "sets_select" ? "pbtrkr_sets" : null,
+        date: isoDate,
+        stage,
+        errorName: /^[A-Za-z][A-Za-z0-9]{0,39}$/.test(String(error?.name || ""))
+          ? error.name
+          : "Error",
+        errorCode: safeErrorCode(error),
+        httpStatus: safeHttpStatus(error)
+      });
+      throw error;
     }
-    const { data } = await retryTransientRequest(() => db
-      .from("pbtrkr_sets")
-      .select("id,match_date,date_raw,set_number,team_a,team_b,game_scores,scores_resolved")
-      .eq("match_date", isoDate)
-      .order("set_number", { ascending: true })
-      .order("id", { ascending: true }));
-    return (data || []).map(toLegacySet);
   }
 
   async function getAllSets() {
