@@ -8,6 +8,8 @@
   const client = () => root.supabaseClient;
   const scoreSaveRequestsInFlight = new Map();
   const singleFlightRequests = new Map();
+  const SCORE_SAVE_RPC_TIMEOUT_MS = 60000;
+  const SCORE_RECONCILIATION_TIMEOUT_MS = 15000;
   const storage = () => (root.localStorage || {
     getItem: () => null,
     setItem: () => undefined,
@@ -268,7 +270,7 @@
       name: row.player_name,
       rating: row.rating,
       DUPR: row.dupr,
-      PWRank: row.pw_rank,
+      PWRank: numericRating(row.pw_rank),
       notes: row.notes || "",
       wins: Number(row.wins || 0),
       points: Number(row.points_earned || 0),
@@ -321,6 +323,7 @@
       set: Number(row.set_number) || row.set_number,
       teamA: row.team_a || "",
       teamB: row.team_b || "",
+      persistedScores: Array.isArray(row.game_scores) ? row.game_scores.slice() : [],
       scores: Array.isArray(row.game_scores) ? row.game_scores.map(value => value || "") : [],
       scoresResolved: row.scores_resolved !== false
     };
@@ -364,6 +367,20 @@
     const fields = "player_key,player_name,rating,dupr,pw_rank,notes,wins,points_earned,games,win_avg_raw,point_avg_raw,win_pct,points_avg,availability,order_index,updated_at";
     const { data } = await retryTransientRequest(() => db.from("pbtrkr_player_stats").select(fields)
       .order("order_index", { ascending: true, nullsFirst: false }).order("player_name"));
+    const ratingDiagnostics = (data || []).reduce((summary, row) => {
+      const rating = numericRating(row.pw_rank);
+      summary.playerCount += 1;
+      if (rating === null) summary.missingPowerRatingCount += 1;
+      else if (rating === 0) summary.zeroPowerRatingCount += 1;
+      return summary;
+    }, { playerCount: 0, missingPowerRatingCount: 0, zeroPowerRatingCount: 0 });
+    console.info("players.power_rating.loaded", {
+      event: "players.power_rating.loaded",
+      timestamp: new Date().toISOString(),
+      sourceTable: "pbtrkr_player_stats",
+      sourceField: "pw_rank",
+      ...ratingDiagnostics
+    });
 
     const { data: sessionData } = await db.auth.getSession();
     const user = sessionData?.session?.user;
@@ -450,7 +467,9 @@
       name: player.name,
       winPct: player.winPct,
       pointsAvg: player.pointsAvg,
-      gamesPlayed: player.games
+      gamesPlayed: player.games,
+      pwRank: player.PWRank,
+      dupr: player.DUPR
     }));
   }
 
@@ -471,8 +490,8 @@
   async function rpc(name, args, options = {}) {
     const startedAt = Date.now();
     const saveRequestId = options.saveRequestId || null;
-    const timeoutMs = options.timeoutMs ?? 15000;
     const isScoreSaveRpc = name === "pbtrkr_save_set_full_once" || name === "pbtrkr_save_set_full";
+    const timeoutMs = options.timeoutMs ?? (isScoreSaveRpc ? SCORE_SAVE_RPC_TIMEOUT_MS : 15000);
     const eventPrefix = isScoreSaveRpc ? "save.rpc" : "supabase.rpc";
     const rpcStarted = {
       saveRequestId,
@@ -740,7 +759,7 @@
           .eq("set_number", String(setNumber))
           .order("id", { ascending: true })
           .limit(2),
-        8000,
+        SCORE_RECONCILIATION_TIMEOUT_MS,
         "PBTRKR_RECONCILE_TIMEOUT",
         {
           saveRequestId,
@@ -769,7 +788,8 @@
     const current = expectedSetId === undefined || expectedSetId === null
       ? first
       : candidates.find(row => String(row.id) === String(expectedSetId)) || null;
-    const persistedScores = normalizedScores(current?.game_scores);
+    const persistedScoresRaw = Array.isArray(current?.game_scores) ? current.game_scores.slice() : [];
+    const persistedScores = normalizedScores(persistedScoresRaw);
     const requestedScores = normalizedScores(expectedScores);
     const intendedRpcRow = Boolean(current) && String(current.id) === String(first?.id);
     const dateMatches = Boolean(current && String(current.match_date) === String(normalizedDate));
@@ -777,7 +797,7 @@
     const matches = intendedRpcRow
       && dateMatches
       && setNumberMatches
-      && JSON.stringify(persistedScores) === JSON.stringify(requestedScores);
+      && JSON.stringify(persistedScoresRaw) === JSON.stringify(requestedScores);
     const finalOutcome = matches ? "confirmed" : "not-confirmed";
     const summary = {
       saveRequestId,
@@ -809,7 +829,8 @@
     return {
       matches,
       set: current,
-      persistedScores
+      persistedScores,
+      persistedScoresRaw
     };
   }
 
@@ -935,7 +956,7 @@
           setNumber = String(params.set);
           setId = params.setId;
           scores = JSON.parse(params.scores || "[]");
-          expectedScores = JSON.parse(params.expectedScores || "[]").map(value => String(value ?? ""));
+          expectedScores = JSON.parse(params.expectedScores || "[]");
           saveIdentity = `${matchDate}:${setNumber}`;
           const existingSave = scoreSaveRequestsInFlight.get(saveIdentity);
           if (existingSave) {
@@ -980,7 +1001,7 @@
           };
           saveRpcStarted = true;
           const saveResult = await rpc("pbtrkr_save_set_full_once", rpcArgs, {
-            timeoutMs: options.timeoutMs ?? 15000,
+            timeoutMs: options.timeoutMs ?? SCORE_SAVE_RPC_TIMEOUT_MS,
             saveRequestId,
             source: params.source || "service.call"
           });
@@ -1183,6 +1204,8 @@
     runSingleFlight,
     dateToIso,
     todayIso,
+    SCORE_SAVE_RPC_TIMEOUT_MS,
+    SCORE_RECONCILIATION_TIMEOUT_MS,
     deviceId,
     legacyDate,
     scheduleWeekday,

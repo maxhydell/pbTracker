@@ -46,6 +46,7 @@ let touchStartY = 0;
 let holdTimer;
 let optimisticUpdates = {};
 const scoreSaveStates = window.PBTRKRScoreState.create();
+const persistedScoreSnapshots = window.PBTRKRScoreState.createPersistedScoreSnapshots();
 let globalData = {
   sets: null,
   trend: null,
@@ -117,6 +118,35 @@ function getSetScores(match) {
   }
 
   return baseScores;
+}
+
+function scoreSetSnapshotKey(set, fallbackSetNumber) {
+  const date = window.pbtrkrDataService.dateToIso(
+    set?.matchDate || set?.date || window.pbtrkrDataService.todayIso()
+  );
+  const setNumber = String(set?.setNumber ?? set?.set ?? fallbackSetNumber ?? "");
+  return `${date || "unknown"}:${setNumber}:${set?.id ?? ""}`;
+}
+
+function rememberPersistedSetScores(set, fallbackSetNumber) {
+  if (!set) return null;
+  const persistedScores = Array.isArray(set.persistedScores)
+    ? set.persistedScores
+    : Array.isArray(set.scores) ? set.scores : null;
+  return persistedScoreSnapshots.capture(
+    scoreSetSnapshotKey(set, fallbackSetNumber),
+    persistedScores
+  );
+}
+
+function commitPersistedSetScores(setNumber, scores) {
+  const set = (globalData.sets || []).find(item => Number(item.set) === Number(setNumber));
+  if (!set || !Array.isArray(scores)) return;
+  const snapshot = scores.slice();
+  persistedScoreSnapshots.commit(scoreSetSnapshotKey(set, setNumber), snapshot);
+  set.persistedScores = snapshot.slice();
+  set.scores = snapshot.map(score => String(score ?? ""));
+  set.scoresResolved = true;
 }
 
 function collectSetScoresFromDom(setNumber) {
@@ -1066,6 +1096,7 @@ function renderSetsInto(container, data, opts = {}) {
 
 
   data.forEach(match => {
+    rememberPersistedSetScores(match, match.set);
     const setWrapper = document.createElement("div");
     setWrapper.className = "set-container";
     setWrapper.innerHTML = `
@@ -1438,8 +1469,14 @@ async function saveSet(setNumber) {
       setNumber: String(setNumber),
       setId: originalSet?.id
     };
-    const previousScores = Array.isArray(originalSet?.scores) ? originalSet.scores : [];
-    attemptedExpectedScores = previousScores.map(score => String(score || ""));
+    const persistedSnapshot = persistedScoreSnapshots.get(
+      scoreSetSnapshotKey(originalSet, setNumber)
+    ) || rememberPersistedSetScores(originalSet, setNumber);
+    if (!Array.isArray(persistedSnapshot)) {
+      throw new Error("The persisted score snapshot is unavailable. Reload this set before saving.");
+    }
+    const previousScores = persistedSnapshot.map(score => String(score ?? ""));
+    attemptedExpectedScores = persistedSnapshot.slice();
     for (let index = 0; index < scores.length; index += 1) {
       const score = String(scores[index] || "");
       const previous = String(previousScores[index] || "");
@@ -1510,7 +1547,7 @@ async function saveSet(setNumber) {
           setNumber: String(context.setNumber),
           setId: context.setId ?? null,
           scores: requestedScores.map(score => String(score || "")),
-          expectedScores: expectedScores.map(score => String(score || "")),
+          expectedScores: expectedScores.map(score => score === undefined ? null : score),
           ratingUpdates: refreshedRatingUpdates,
           saveRequestId: requestId
         };
@@ -1551,22 +1588,41 @@ async function saveSet(setNumber) {
         && Array.isArray(pendingSave.expectedScores)
         && Array.isArray(pendingSave.ratingUpdates)) {
         let recoveryResult;
+        let pendingReconciliation;
+        let confirmedPersistedScores = null;
         try {
-          recoveryResult = await submitWithRatingConflictRecovery(
-            {
-              date: pendingSave.date,
-              setNumber: pendingSave.setNumber,
-              setId: pendingSave.setId
-            },
+          pendingReconciliation = await window.pbtrkrDataService.reconcileSetSave(
+            pendingSave.date,
+            pendingSave.setNumber,
             pendingSave.scores,
-            pendingSave.expectedScores,
-            pendingSave.ratingUpdates,
-            pendingSave.saveRequestId,
-            "saveSet.idempotent_recovery"
+            pendingSave.setId,
+            pendingSave.saveRequestId
           );
+          if (pendingReconciliation.matches) {
+            confirmedPersistedScores = pendingReconciliation.persistedScoresRaw;
+            recoveryResult = {
+              success: true,
+              reconciled: true,
+              set_id: pendingReconciliation.set?.id,
+              scores: pendingReconciliation.persistedScores
+            };
+          } else {
+            recoveryResult = await submitWithRatingConflictRecovery(
+              {
+                date: pendingSave.date,
+                setNumber: pendingSave.setNumber,
+                setId: pendingSave.setId
+              },
+              pendingSave.scores,
+              pendingSave.expectedScores,
+              pendingSave.ratingUpdates,
+              pendingSave.saveRequestId,
+              "saveSet.idempotent_recovery"
+            );
+          }
         } catch (recoveryError) {
           if (recoveryError?.code === "40001") throw recoveryError;
-          const error = new Error("A previous score save is still unresolved. Its original request was safely retried; no new score snapshot was submitted.");
+          const error = new Error("A previous score save is still unresolved. Reconciliation failed, so its original request was not retried.");
           error.code = "PBTRKR_PRIOR_SAVE_UNCONFIRMED";
           error.cause = recoveryError;
           throw error;
@@ -1593,8 +1649,10 @@ async function saveSet(setNumber) {
             clearUncertainScoreSave(saveContext.date, setNumber);
             uncertainSaveRecord = null;
             if (originalSet && replayReconciliation.set) {
-              originalSet.scores = replayReconciliation.persistedScores;
-              originalSet.scoresResolved = true;
+              commitPersistedSetScores(
+                setNumber,
+                replayReconciliation.persistedScoresRaw
+              );
             }
             clearMemoryCache();
             try {
@@ -1613,15 +1671,15 @@ async function saveSet(setNumber) {
             alert("The previous save was committed, but this set has since changed. Review the current scores and click Save again if you still want to apply your edits.");
             return;
           }
+          confirmedPersistedScores = replayReconciliation.persistedScoresRaw;
         }
         clearUncertainScoreSave(saveContext.date, setNumber);
         lastCompletedStage = "save.reconciliation.completed";
         reconciliationOutcome = recoveryResult.reconciled ? "confirmed_by_reconciliation" : "confirmed_by_idempotency";
-        if (originalSet) {
-          originalSet.scores = pendingSave.scores.map(score => String(score || ""));
-          originalSet.scoresResolved = true;
-          attemptedExpectedScores = originalSet.scores.slice();
-        }
+        commitPersistedSetScores(
+          setNumber,
+          confirmedPersistedScores || recoveryResult.scores || pendingSave.scores
+        );
         clearMemoryCache();
         if (sameScoreSnapshot(scores, pendingSave.scores)) {
           try {
@@ -1684,6 +1742,7 @@ async function saveSet(setNumber) {
         lastCompletedStage = "save.reconciliation.completed";
         clearUncertainScoreSave(saveContext.date, setNumber);
         if (sameScoreSnapshot(scores, pendingSave.scores)) {
+          commitPersistedSetScores(setNumber, reconciliation.persistedScoresRaw);
           scoreSaveStates.markSaved(saveSnapshot);
           applyCommittedSetScores(setNumber, scores, saveSnapshot);
           updateSetSaveIndicators(setNumber, scores.length);
@@ -1700,11 +1759,7 @@ async function saveSet(setNumber) {
           return;
         }
         uncertainSaveRecord = null;
-        if (originalSet) {
-          originalSet.scores = pendingSave.scores.map(score => String(score || ""));
-          originalSet.scoresResolved = true;
-          attemptedExpectedScores = originalSet.scores.slice();
-        }
+        commitPersistedSetScores(setNumber, reconciliation.persistedScoresRaw);
         clearMemoryCache();
         try {
           await loadPlayers();
@@ -1718,79 +1773,7 @@ async function saveSet(setNumber) {
         }
       } else {
         reconciliationOutcome = "not_confirmed";
-        clearMemoryCache();
-        await loadPlayers();
-        const recoveryId = pendingSave.saveRequestId || saveRequestId;
-        saveRequestId = recoveryId;
-        const recoveryRatingUpdates = await buildRatingUpdatesForSet(setNumber, pendingSave.scores);
-        uncertainSaveRecord = {
-          ...pendingSave,
-          saveRequestId: recoveryId,
-          expectedScores: reconciliation.persistedScores,
-          ratingUpdates: recoveryRatingUpdates
-        };
-        saveUncertainScoreSave(
-          saveContext,
-          pendingSave.scores,
-          recoveryId,
-          recoveryRatingUpdates,
-          "in_flight",
-          reconciliation.persistedScores
-        );
-        let recoveryResult;
-        try {
-          recoveryResult = await submitWithRatingConflictRecovery(
-            {
-              date: pendingSave.date,
-              setNumber: pendingSave.setNumber,
-              setId: pendingSave.setId
-            },
-            pendingSave.scores,
-            reconciliation.persistedScores,
-            recoveryRatingUpdates,
-            recoveryId,
-            "saveSet.legacy_recovery"
-          );
-        } catch (recoveryError) {
-          if (recoveryError?.code === "40001") throw recoveryError;
-          const error = priorScoreSaveUnconfirmedError();
-          error.cause = recoveryError;
-          throw error;
-        }
-        if (recoveryResult?.success !== true) throw priorScoreSaveUnconfirmedError();
-        clearUncertainScoreSave(saveContext.date, setNumber);
-        uncertainSaveRecord = null;
-        lastCompletedStage = "save.reconciliation.completed";
-        reconciliationOutcome = "confirmed_by_idempotency";
-        if (originalSet) {
-          originalSet.scores = pendingSave.scores.map(score => String(score || ""));
-          originalSet.scoresResolved = true;
-        }
-        if (sameScoreSnapshot(scores, pendingSave.scores)) {
-          scoreSaveStates.markSaved(saveSnapshot);
-          applyCommittedSetScores(setNumber, scores, saveSnapshot);
-          updateSetSaveIndicators(setNumber, scores.length);
-          finalOutcome = "confirmed";
-          rpcOutcome = "prior_request_confirmed";
-          scoreSaveStateBackgroundNotification();
-          scoreSaveStateBackgroundRefresh();
-          return;
-        }
-        clearMemoryCache();
-        try {
-          await loadPlayers();
-        } catch (refreshError) {
-          console.warn("save.recovery.refresh.failed", {
-            saveRequestId,
-            event: "save.recovery.refresh.failed",
-            timestamp: new Date().toISOString(),
-            error: safeSaveErrorLogDetails(refreshError)
-          });
-        }
-        finalOutcome = "confirmed";
-        rpcOutcome = "prior_request_confirmed";
-        alert("The previous save is confirmed. Your newer edits were not submitted; review them and click Save again.");
-        return;
+        throw priorScoreSaveUnconfirmedError();
       }
     } else if (scoreSaveStates.hasUnknown(setNumber, scores.length)) {
       const unknownScores = scores.map((score, gameIndex) => {
@@ -1820,6 +1803,7 @@ async function saveSet(setNumber) {
         lastCompletedStage = "save.reconciliation.completed";
         clearUncertainScoreSave(saveContext.date, setNumber);
         uncertainSaveRecord = null;
+        commitPersistedSetScores(setNumber, reconciliation.persistedScoresRaw);
         if (sameScoreSnapshot(scores, unknownScores)) {
           scoreSaveStates.markSaved(saveSnapshot);
           applyCommittedSetScores(setNumber, scores, saveSnapshot);
@@ -1836,66 +1820,13 @@ async function saveSet(setNumber) {
           scoreSaveStateBackgroundRefresh();
           return;
         }
-        if (originalSet) {
-          originalSet.scores = reconciliation.persistedScores;
-          originalSet.scoresResolved = true;
-          attemptedExpectedScores = originalSet.scores.slice();
-        }
-      } else {
-        reconciliationOutcome = "not_confirmed";
-        clearMemoryCache();
-        await loadPlayers();
-        const recoveryRatingUpdates = await buildRatingUpdatesForSet(setNumber, unknownScores);
-        uncertainSaveRecord = {
-          ...uncertainSaveRecord,
-          expectedScores: reconciliation.persistedScores,
-          ratingUpdates: recoveryRatingUpdates
-        };
-        saveUncertainScoreSave(
-          saveContext,
-          unknownScores,
-          saveRequestId,
-          recoveryRatingUpdates,
-          "in_flight",
-          reconciliation.persistedScores
-        );
-        let recoveryResult;
-        try {
-          recoveryResult = await submitWithRatingConflictRecovery(
-            saveContext,
-            unknownScores,
-            reconciliation.persistedScores,
-            recoveryRatingUpdates,
-            saveRequestId,
-            "saveSet.unknown_state_recovery"
-          );
-        } catch (recoveryError) {
-          if (recoveryError?.code === "40001") throw recoveryError;
-          const error = priorScoreSaveUnconfirmedError();
-          error.cause = recoveryError;
-          throw error;
-        }
-        if (recoveryResult?.success !== true) throw priorScoreSaveUnconfirmedError();
-        clearUncertainScoreSave(saveContext.date, setNumber);
-        uncertainSaveRecord = null;
-        if (originalSet) {
-          originalSet.scores = unknownScores.slice();
-          originalSet.scoresResolved = true;
-        }
-        if (sameScoreSnapshot(scores, unknownScores)) {
-          scoreSaveStates.markSaved(saveSnapshot);
-          applyCommittedSetScores(setNumber, scores, saveSnapshot);
-          updateSetSaveIndicators(setNumber, scores.length);
-          finalOutcome = "confirmed";
-          rpcOutcome = "prior_request_confirmed";
-          scoreSaveStateBackgroundNotification();
-          scoreSaveStateBackgroundRefresh();
-          return;
-        }
         finalOutcome = "confirmed";
         rpcOutcome = "prior_request_confirmed";
         alert("The previous save is confirmed. Your newer edits were not submitted; review them and click Save again.");
         return;
+      } else {
+        reconciliationOutcome = "not_confirmed";
+        throw priorScoreSaveUnconfirmedError();
       }
     }
 
@@ -2003,28 +1934,10 @@ async function saveSet(setNumber) {
         if (originalSet && currentSet.set) {
           originalSet.scores = currentSet.persistedScores;
           originalSet.scoresResolved = true;
+          commitPersistedSetScores(setNumber, currentSet.persistedScoresRaw);
         }
         clearMemoryCache();
         await loadPlayers();
-        if (!saveAttemptPersisted && uncertainSaveRecord) {
-          const recoveryRatingUpdates = await buildRatingUpdatesForSet(
-            setNumber,
-            uncertainSaveRecord.scores
-          );
-          uncertainSaveRecord = {
-            ...uncertainSaveRecord,
-            expectedScores: currentSet.persistedScores,
-            ratingUpdates: recoveryRatingUpdates
-          };
-          saveUncertainScoreSave(
-            saveContext,
-            uncertainSaveRecord.scores,
-            uncertainSaveRecord.saveRequestId || saveRequestId,
-            recoveryRatingUpdates,
-            "uncertain",
-            currentSet.persistedScores
-          );
-        }
         console.info("save.recovery.conflict_refreshed", {
           saveRequestId,
           event: "save.recovery.conflict_refreshed",
@@ -2179,7 +2092,7 @@ function saveUncertainScoreSave(
     setId: context.setId ?? null,
     scores: scores.map(score => String(score || "")),
     ...(version >= 2 ? {
-      expectedScores: expectedScores.map(score => String(score || "")),
+      expectedScores: expectedScores.map(score => score === undefined ? null : score),
       ratingUpdates: Array.isArray(ratingUpdates) ? ratingUpdates : []
     } : {}),
     saveRequestId: saveRequestId || null,
@@ -2207,16 +2120,19 @@ function applyCommittedSetScores(setNumber, scores, saveSnapshot, ratingUpdates 
     const currentState = scoreSaveStates.get(setNumber, item.gameIndex);
     if (currentState.version !== item.version) continue;
     delete optimisticUpdates[`${setNumber}-${item.gameIndex}`];
-    if (currentSet) currentSet.scores[item.gameIndex] = scores[item.gameIndex] || "";
   }
-  if (currentSet) currentSet.scoresResolved = true;
+  if (currentSet) commitPersistedSetScores(setNumber, scores);
   lastTodaySetsData = globalData.sets;
 
   for (const update of ratingUpdates) {
     const player = playersCache.find(entry => entry.playerKey === update.player_key);
     if (!player) continue;
     player.DUPR = Number(update.expected_dupr || 0) + Number(update.delta_dupr || 0);
-    player.PWRank = Number(update.expected_pw_rank ?? 50) + Number(update.delta_pw_rank || 0);
+    if (update.expected_pw_rank !== null
+      && update.expected_pw_rank !== undefined
+      && Number.isFinite(Number(update.expected_pw_rank))) {
+      player.PWRank = Number(update.expected_pw_rank) + Number(update.delta_pw_rank || 0);
+    }
   }
 }
 
@@ -2267,7 +2183,7 @@ async function buildRatingUpdatesForSet(setNumber, scores, forceRefresh = false)
       player_name: player.name,
       player_key: player.playerKey || normalizePlayerLookupName(player.name),
       expected_dupr: Number(player.DUPR || 0),
-      expected_pw_rank: Number(player.PWRank ?? 50),
+      expected_pw_rank: Number(player.PWRank),
       delta_dupr: Number(change.delta_A || 0),
       delta_pw_rank: Number(change.delta_B || 0),
       opponent_avg: Number(change.opponent_avg || 0)
@@ -2287,13 +2203,14 @@ async function calculateSetRatings(setData, playersList) {
   // Get current power rankings for each player
 const getPlayerPWRank = (name) => {
   const player = playersList.find(p => normalizePlayerLookupName(p.name) === normalizePlayerLookupName(name));
-  if (!player) {
+  const rank = player?.PWRank;
+  if (!player || rank === null || rank === undefined || String(rank).trim() === "" || !Number.isFinite(Number(rank))) {
     console.warn("⚠️ Missing player lookup:", name);
+    return null;
   }
-  return Number(player?.PWRank ?? 50);
+  return Number(rank);
 };
 
-// Build arrays of valid ratings ONLY
 const teamAPowers = teamA.map(getPlayerPWRank);
 const teamBPowers = teamB.map(getPlayerPWRank);
 
@@ -2317,9 +2234,7 @@ const teamBAvg = teamBPowers.length
     return [];
   }
 
-  const predicted = calculatePredictedScore(teamAAvg, teamBAvg);
-
-  if (teamAAvg === null || teamBAvg === null) {
+  if (teamAPowers.some(value => value === null) || teamBPowers.some(value => value === null)) {
   console.warn("⚠️ Missing PWRank data, skipping rating calc for this set", {
     teamA,
     teamB,
@@ -2328,6 +2243,8 @@ const teamBAvg = teamBPowers.length
   });
   return [];
 }
+
+  const predicted = calculatePredictedScore(teamAAvg, teamBAvg);
 
   const ratingChanges = [];
   let totalTeamAWins = 0;
@@ -2679,9 +2596,9 @@ async function processSavedSetRatings(setNumber) {
         id: playerRecord.id || null,
         name: playerRecord.name,
         originalDupr: Number(playerRecord.DUPR || 0),
-        originalPWRank: Number(playerRecord.PWRank ?? 50),
+        originalPWRank: Number(playerRecord.PWRank),
         nextDupr: Number((Number(playerRecord.DUPR || 0) + Number(change.delta_A || 0)).toFixed(3)),
-        nextPWRank: Number((Number(playerRecord.PWRank || 50) + Number(change.delta_B || 0)).toFixed(3))
+        nextPWRank: Number((Number(playerRecord.PWRank) + Number(change.delta_B || 0)).toFixed(3))
       });
     }
 
@@ -2845,17 +2762,6 @@ function addGame(setNumber, e) {
   if (scores[nextIndex] !== undefined) {
     unlockGame(setNumber, nextIndex);
     return;
-  }
-
-  set.scores[nextIndex] = "";
-  if (globalData.sets) {
-    const liveSet = globalData.sets.find(s => s.set === setNumber);
-    if (liveSet) {
-      if (!Array.isArray(liveSet.scores)) {
-        liveSet.scores = [];
-      }
-      liveSet.scores[nextIndex] = "";
-    }
   }
 
   // 🔥 CASE 2: add another game container
@@ -3510,7 +3416,12 @@ async function loadPlayersList() {
     // Build table rows
     sortedPlayers.forEach((player, index) => {
       const gamesPlayed = countGamesPlayedInSets(allSets, player.name);
-      const rating = Number(player.PWRank || 0).toFixed(2);
+      const powerRating = player.PWRank === null || player.PWRank === undefined
+        || String(player.PWRank).trim() === ""
+        || !Number.isFinite(Number(player.PWRank))
+        ? null
+        : Number(player.PWRank);
+      const rating = powerRating === null ? "Unavailable" : powerRating.toFixed(2);
       const phone = player.phone || "";
       
       html += `
@@ -4864,7 +4775,6 @@ function updateScore(set, gameIndex, input) {
   }
 
   const match = globalData.sets?.find(item => Number(item.set) === Number(set));
-  if (match) match.scores[gameIndex] = score;
   isEditingScores = false;
   updateSetPrediction(set);
 }
@@ -5042,12 +4952,15 @@ let lastModalAllSets = null;
 function buildRankedStatRows(entries, selectedPlayer, formatter) {
   const rows = [...entries]
     .sort((a, b) => {
+      const aAvailable = a.value !== null && a.value !== undefined && Number.isFinite(Number(a.value));
+      const bAvailable = b.value !== null && b.value !== undefined && Number.isFinite(Number(b.value));
+      if (aAvailable !== bAvailable) return aAvailable ? -1 : 1;
       const diff = Number(b.value || 0) - Number(a.value || 0);
       if (diff !== 0) return diff;
       return String(a.name || "").localeCompare(String(b.name || ""));
     })
     .map((row, index) => ({
-      rankNumber: index + 1,
+      rankNumber: row.value === null || row.value === undefined ? "—" : index + 1,
       name: capitalize(row.name),
       value: row.value
     }));
@@ -5159,10 +5072,14 @@ function handleAnalyticsStatClick(kind) {
     const rows = buildRankedStatRows(
       (playersCache || []).map(player => ({
         name: String(player.name || "").toLowerCase(),
-        value: Number(player.PWRank || 0)
+        value: player.PWRank === null || player.PWRank === undefined
+          || String(player.PWRank).trim() === ""
+          || !Number.isFinite(Number(player.PWRank))
+          ? null
+          : Number(player.PWRank)
       })),
       pk,
-      value => Number(value || 0).toFixed(2)
+      value => value === null || value === undefined ? "Unavailable" : Number(value).toFixed(2)
     );
     showAnalyticsModal(
       "Power Rating",

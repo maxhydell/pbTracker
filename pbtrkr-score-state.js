@@ -121,13 +121,38 @@
     return left.every((value, index) => String(value ?? "") === String(right[index] ?? ""));
   }
 
+  function createPersistedScoreSnapshots() {
+    const snapshots = new Map();
+    const copy = scores => Array.isArray(scores) ? scores.map(value => value) : null;
+    return {
+      capture(identity, scores) {
+        const key = String(identity ?? "");
+        if (!key || snapshots.has(key) || !Array.isArray(scores)) return this.get(key);
+        snapshots.set(key, copy(scores));
+        return this.get(key);
+      },
+      get(identity) {
+        return copy(snapshots.get(String(identity ?? "")));
+      },
+      commit(identity, scores) {
+        const key = String(identity ?? "");
+        if (!key || !Array.isArray(scores)) return null;
+        snapshots.set(key, copy(scores));
+        return this.get(key);
+      },
+      has(identity) {
+        return snapshots.has(String(identity ?? ""));
+      }
+    };
+  }
+
   function runBackground(task, onError) {
     Promise.resolve().then(task).catch(error => {
       if (onError) onError(error);
     });
   }
 
-  const api = { create, scoreSnapshotsMatch, runBackground };
+  const api = { create, createPersistedScoreSnapshots, scoreSnapshotsMatch, runBackground };
   root.PBTRKRScoreState = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof window !== "undefined" ? window : globalThis);
