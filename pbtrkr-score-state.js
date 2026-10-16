@@ -116,13 +116,18 @@
     };
   }
 
+  function scoreSnapshotsMatch(left, right) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+    return left.every((value, index) => String(value ?? "") === String(right[index] ?? ""));
+  }
+
   function runBackground(task, onError) {
     Promise.resolve().then(task).catch(error => {
       if (onError) onError(error);
     });
   }
 
-  const api = { create, runBackground };
+  const api = { create, scoreSnapshotsMatch, runBackground };
   root.PBTRKRScoreState = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof window !== "undefined" ? window : globalThis);

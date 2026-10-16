@@ -7,6 +7,7 @@
   const root = typeof window !== "undefined" ? window : globalThis;
   const client = () => root.supabaseClient;
   const scoreSaveRequestsInFlight = new Map();
+  const singleFlightRequests = new Map();
   const storage = () => (root.localStorage || {
     getItem: () => null,
     setItem: () => undefined,
@@ -31,6 +32,57 @@
   function isEditorUser(user) {
     return root.PBTRKRAuthorization?.isPbtrkrEditorUser(user) === true;
   }
+
+  function isTransientSupabaseError(error) {
+    const status = Number(error?.status ?? error?.statusCode);
+    const code = String(error?.code || "");
+    return code === "PGRST002"
+      || status === 502
+      || status === 503
+      || status === 504;
+  }
+
+  async function retryTransientRequest(operation, options = {}) {
+    const maxAttempts = Math.max(1, Number(options.maxAttempts) || 3);
+    const baseDelayMs = Math.max(0, Number(options.baseDelayMs ?? 250));
+    const maxDelayMs = Math.max(baseDelayMs, Number(options.maxDelayMs ?? 2000));
+    const random = options.random || Math.random;
+    const sleep = options.sleep || (delay => new Promise(resolve => setTimeout(resolve, delay)));
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        const result = await operation();
+        if (!result?.error) return result;
+        if (!isTransientSupabaseError(result.error) || attempt === maxAttempts) {
+          throw result.error;
+        }
+      } catch (error) {
+        if (!isTransientSupabaseError(error) || attempt === maxAttempts) throw error;
+      }
+
+      const cap = Math.min(maxDelayMs, baseDelayMs * (2 ** (attempt - 1)));
+      await sleep(Math.floor(Math.max(0, Math.min(1, random())) * cap));
+    }
+
+    throw new Error("Supabase request retry loop ended unexpectedly");
+  }
+
+  function runSingleFlight(key, operation) {
+    const requestKey = String(key || "");
+    if (!requestKey) return Promise.reject(new Error("A single-flight request key is required"));
+    const current = singleFlightRequests.get(requestKey);
+    if (current) return current;
+
+    const request = Promise.resolve().then(operation);
+    singleFlightRequests.set(requestKey, request);
+    request.finally(() => {
+      if (singleFlightRequests.get(requestKey) === request) {
+        singleFlightRequests.delete(requestKey);
+      }
+    }).catch(() => {});
+    return request;
+  }
+
   const DAY_FORMATTER = new Intl.DateTimeFormat("en-CA", {
     timeZone: "America/New_York",
     year: "numeric",
@@ -178,6 +230,12 @@
     return Number(text) || 0;
   }
 
+  function numericRating(value) {
+    if (value === null || value === undefined || String(value).trim() === "") return null;
+    const rating = Number(value);
+    return Number.isFinite(rating) ? rating : null;
+  }
+
   function toPercent(value) {
     const raw = String(value ?? "").trim();
     return num(raw);
@@ -290,10 +348,11 @@
     const rows = [];
     const pageSize = 1000;
     for (let start = 0; ; start += pageSize) {
-      let query = db.from(table).select(columns).range(start, start + pageSize - 1);
-      if (configure) query = configure(query);
-      const { data, error } = await query;
-      if (error) throw error;
+      const { data } = await retryTransientRequest(() => {
+        let query = db.from(table).select(columns).range(start, start + pageSize - 1);
+        if (configure) query = configure(query);
+        return query;
+      });
       rows.push(...(data || []));
       if (!data || data.length < pageSize) break;
     }
@@ -303,17 +362,21 @@
   async function getPlayers() {
     const db = client();
     const fields = "player_key,player_name,rating,dupr,pw_rank,notes,wins,points_earned,games,win_avg_raw,point_avg_raw,win_pct,points_avg,availability,order_index,updated_at";
-    const { data, error } = await db.from("pbtrkr_player_stats").select(fields)
-      .order("order_index", { ascending: true, nullsFirst: false }).order("player_name");
-    if (error) throw error;
+    const { data } = await retryTransientRequest(() => db.from("pbtrkr_player_stats").select(fields)
+      .order("order_index", { ascending: true, nullsFirst: false }).order("player_name"));
 
     const { data: sessionData } = await db.auth.getSession();
     const user = sessionData?.session?.user;
     if (isEditorUser(user)) {
-      const { data: phoneRows, error: phoneError } = await db.rpc("pbtrkr_get_player_phones", {
-        p_device_id: deviceId()
-      });
-      if (phoneError && phoneError.code !== "42501") throw phoneError;
+      let phoneRows;
+      try {
+        ({ data: phoneRows } = await retryTransientRequest(() => db.rpc("pbtrkr_get_player_phones", {
+          p_device_id: deviceId()
+        })));
+      } catch (phoneError) {
+        if (phoneError.code !== "42501") throw phoneError;
+        phoneRows = [];
+      }
       const phoneByKey = new Map((phoneRows || []).map(row => [row.player_key, row.phone]));
         return (data || [])
           .filter(row => String(row.player_name || "").trim() !== "")
@@ -336,12 +399,11 @@
   async function getSchedule() {
     const dates = dayWindow();
     const db = client();
-    const { data, error } = await db
+    const { data } = await retryTransientRequest(() => db
       .from("pbtrkr_schedule_days")
       .select("id,schedule_date,date_raw,day_number,players,statuses,raw_row")
       .in("schedule_date", dates)
-      .order("id", { ascending: true });
-    if (error) throw error;
+      .order("id", { ascending: true }));
     return normalizeScheduleRows(data, dates);
   }
 
@@ -352,20 +414,18 @@
       const { data: authData } = await db.auth.getSession();
       const user = authData?.session?.user;
       if (isEditorUser(user)) {
-        const { error: ensureError } = await db.rpc("pbtrkr_ensure_today_sets", {
+        await retryTransientRequest(() => db.rpc("pbtrkr_ensure_today_sets", {
           p_match_date: isoDate,
           p_device_id: deviceId()
-        });
-        if (ensureError) throw ensureError;
+        }));
       }
     }
-    const { data, error } = await db
+    const { data } = await retryTransientRequest(() => db
       .from("pbtrkr_sets")
       .select("id,match_date,date_raw,set_number,team_a,team_b,game_scores,scores_resolved")
       .eq("match_date", isoDate)
       .order("set_number", { ascending: true })
-      .order("id", { ascending: true });
-    if (error) throw error;
+      .order("id", { ascending: true }));
     return (data || []).map(toLegacySet);
   }
 
@@ -397,12 +457,11 @@
   async function getLastUpdated() {
     const tables = ["pbtrkr_player_stats", "pbtrkr_schedule_days", "pbtrkr_sets"];
     const values = await Promise.all(tables.map(async table => {
-      const { data, error } = await client()
+      const { data } = await retryTransientRequest(() => client()
         .from(table)
         .select("updated_at")
         .order("updated_at", { ascending: false })
-        .limit(1);
-      if (error) throw error;
+        .limit(1));
       return data?.[0]?.updated_at || null;
     }));
     const timestamps = values.filter(Boolean).sort();
@@ -1119,6 +1178,9 @@
 
   const service = {
     call,
+    isTransientSupabaseError,
+    retryTransientRequest,
+    runSingleFlight,
     dateToIso,
     todayIso,
     deviceId,
@@ -1149,6 +1211,7 @@
     toLegacySet,
     mergeSupabasePlayerRows,
     num,
+    numericRating,
     toPercent
   };
 

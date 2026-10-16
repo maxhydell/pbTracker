@@ -59,6 +59,11 @@
     <div class="title">Pickleball Tracker</div>
   </div>
 
+  <div id="dataUnavailable" class="data-unavailable-banner" role="alert" aria-live="polite" hidden>
+    <span id="dataUnavailableMessage">Data temporarily unavailable — Retry.</span>
+    <button id="dataUnavailableRetry" type="button" onclick="retryStartupData()">Retry</button>
+  </div>
+
   <div id="sideMenu" class="side-menu">
 
     <div class="menu-top">

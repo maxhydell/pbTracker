@@ -19,6 +19,9 @@ let scheduleRefreshPausedUntil = 0;
 let appStartupPromise = null;
 let appBootComplete = false;
 let refreshLoopStarted = false;
+let dataUnavailable = false;
+let playersLoadPromise = null;
+const setPredictionVersions = new Map();
 const saveRequestGuard = window.PBTRKRScoreState.create().createSaveRequestGuard();
 const BOOK_COURT_STORAGE_KEY = "pbTracker_bookedCourtDays_v1";
 
@@ -214,7 +217,7 @@ async function checkDeviceWhitelist() {
     }
     const authorized = await window.pbtrkrDataService.isDeviceAuthorized(id);
 
-    if (authorized) {
+    if (authorized && !dataUnavailable) {
       setEditingLockState(false);
       localStorage.setItem(LS_DEVICE_VERIFIED, "1");
       clearAccessRestrictionPopups();
@@ -280,9 +283,7 @@ async function loadCriticalPageData(pageId) {
 
   if (pageId === "players") {
     updateLoadingProgress(35, "Loading players...");
-    if (!playersCache.length) {
-      await loadPlayers();
-    }
+    await loadPlayers(true);
     updateLoadingProgress(80, "Building players...");
     await loadPlayersList();
     return;
@@ -295,6 +296,49 @@ async function loadCriticalPageData(pageId) {
 
   updateLoadingProgress(80, "Building sets...");
   await loadTodaySetsAll();
+}
+
+function showDataUnavailable(error) {
+  dataUnavailable = true;
+  setEditingLockState(true);
+  lockEditingIfNeeded();
+
+  const banner = document.getElementById("dataUnavailable");
+  const message = document.getElementById("dataUnavailableMessage");
+  if (banner && message) {
+    const hasCachedData = playersCache.length > 0
+      || Object.values(globalData).some(value => Array.isArray(value) && value.length > 0);
+    message.textContent = hasCachedData
+      ? "Data temporarily unavailable — showing cached data (stale). Score editing is disabled."
+      : "Data temporarily unavailable — live data could not be loaded.";
+    banner.hidden = false;
+  }
+  console.error("PBTRKR live data unavailable", {
+    code: String(error?.code || "unavailable").slice(0, 32),
+    status: Number.isInteger(Number(error?.status)) ? Number(error.status) : null
+  });
+}
+
+function clearDataUnavailable() {
+  dataUnavailable = false;
+  const banner = document.getElementById("dataUnavailable");
+  if (banner) banner.hidden = true;
+}
+
+async function retryStartupData() {
+  const button = document.getElementById("dataUnavailableRetry");
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Retrying...";
+  }
+  try {
+    await initApp();
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = "Retry";
+    }
+  }
 }
 
 function queueBackgroundStartup(pageId) {
@@ -372,6 +416,9 @@ function queueBackgroundStartup(pageId) {
       trackVisitor();
     } catch (err) {
       console.error("Background startup failed:", err);
+      if (window.pbtrkrDataService?.isTransientSupabaseError(err)) {
+        showDataUnavailable(err);
+      }
     } finally {
       appBootComplete = true;
     }
@@ -561,20 +608,27 @@ async function initApp() {
     const currentPage = getInitialPageFromPath();
 
     updateLoadingProgress(15, "Loading players...");
-    await loadPlayers();
+    await loadPlayers(true);
     await loadCriticalPageData(currentPage);
 
     updateLoadingProgress(92, "Opening page...");
     showPage(currentPage, { skipPageLoad: true, skipTracking: true });
     updateLoadingProgress(100, "Ready");
     hideLoadingScreen();
+    clearDataUnavailable();
 
     queueBackgroundStartup(currentPage);
+    appStartupPromise = null;
 
   })().catch(err => {
     appStartupPromise = null;
     appBootComplete = false;
-    throw err;
+    showDataUnavailable(err);
+    showPage(getInitialPageFromPath(), { skipPageLoad: true, skipTracking: true });
+    renderGreeting();
+    renderPlayerOnboard();
+    hideLoadingScreen();
+    return false;
   });
 
   return appStartupPromise;
@@ -795,10 +849,13 @@ function normalizePlayerLookupName(name) {
 }
 
 async function loadPlayers(forceRefresh = false) {
-  const loadedPlayers = await callAPI({ action: "getPlayers" }, { force: forceRefresh });
-  playersCache = Array.isArray(loadedPlayers)
-    ? loadedPlayers.filter(player => normalizePlayerLookupName(player?.name) !== "")
-    : [];
+  if (playersLoadPromise) return playersLoadPromise;
+  playersLoadPromise = (async () => {
+    const loadedPlayers = await callAPI({ action: "getPlayers" }, { force: forceRefresh });
+    if (!Array.isArray(loadedPlayers)) {
+      throw new Error("Supabase returned an invalid player list");
+    }
+    playersCache = loadedPlayers.filter(player => normalizePlayerLookupName(player?.name) !== "");
   
   // Augment with Supabase data only when the Supabase path is active.
   if (window.PBTRKR_USE_SUPABASE_DATA === true && window.supabaseClient && Array.isArray(playersCache)) {
@@ -844,6 +901,12 @@ async function loadPlayers(forceRefresh = false) {
       console.error("⚠️ Error augmenting players with Supabase data:", err);
     }
   }
+  })();
+  try {
+    return await playersLoadPromise;
+  } finally {
+    playersLoadPromise = null;
+  }
 }
 
 
@@ -879,6 +942,8 @@ function showPage(id, options = {}) {
   if (options.skipPageLoad) {
     return;
   }
+
+  if (dataUnavailable) return;
 
   if (id === "rankings") {
     requestAnimationFrame(() => loadRankings());
@@ -1114,8 +1179,75 @@ function renderSetsInto(container, data, opts = {}) {
       setWrapper.querySelector(".set-body").innerHTML += matchCard;
     });
 
+    setWrapper.querySelector(".set-body").insertAdjacentHTML("beforeend", `
+      <section class="set-prediction" data-set="${escapeHtml(String(match.set))}" aria-live="polite">
+        <strong>Prediction</strong>
+        <div class="set-prediction-content">Calculating from current player ratings...</div>
+        <small>Predictions are estimates only. Ratings change only after a confirmed save.</small>
+      </section>
+    `);
     container.appendChild(setWrapper);
+    updateSetPrediction(match.set);
   });
+}
+
+function formatPredictionDelta(value, digits) {
+  const delta = Number(value);
+  if (!Number.isFinite(delta)) return "Unavailable";
+  return `${delta > 0 ? "+" : ""}${delta.toFixed(digits)}`;
+}
+
+async function updateSetPrediction(setNumber) {
+  const panels = [...document.querySelectorAll(".set-prediction")]
+    .filter(panel => String(panel.dataset.set) === String(setNumber));
+  if (!panels.length) return;
+
+  const version = (setPredictionVersions.get(String(setNumber)) || 0) + 1;
+  setPredictionVersions.set(String(setNumber), version);
+  const set = (globalData.sets || []).find(item => Number(item.set) === Number(setNumber));
+  if (!set) return;
+
+  try {
+    const scores = collectSetScoresFromDom(setNumber);
+    const prediction = await window.PBTRKRPredictions.buildSetPrediction(
+      set,
+      playersCache,
+      scores,
+      calculatePredictedScore,
+      calculateSetRatings
+    );
+    if (setPredictionVersions.get(String(setNumber)) !== version) return;
+
+    const html = !prediction.available
+      ? `<span class="prediction-unavailable">${escapeHtml(prediction.reason)}</span>`
+      : `
+        <div class="set-prediction-score">
+          Expected score: ${prediction.teamA.map(name => escapeHtml(name)).join(" / ")} ${prediction.forecastScore.teamA}
+          - ${prediction.forecastScore.teamB} ${prediction.teamB.map(name => escapeHtml(name)).join(" / ")}
+        </div>
+        ${prediction.hasEnteredScore
+          ? prediction.ratingChanges.length
+            ? `<ul>${prediction.ratingChanges.map(change => `
+                <li>
+                  ${escapeHtml(change.player_name)}:
+                  DUPR Alternative ${formatPredictionDelta(change.delta_A, 3)};
+                  Power Rating ${formatPredictionDelta(change.delta_B, 3)}
+                </li>
+              `).join("")}</ul>`
+            : `<span class="prediction-unavailable">Rating deltas are unavailable for these scores.</span>`
+          : `<span>Enter a complete score to preview rating changes.</span>`}
+      `;
+    panels.forEach(panel => {
+      const content = panel.querySelector(".set-prediction-content");
+      if (content) content.innerHTML = html;
+    });
+  } catch (error) {
+    console.warn("Set prediction unavailable:", error);
+    panels.forEach(panel => {
+      const content = panel.querySelector(".set-prediction-content");
+      if (content) content.textContent = "Prediction unavailable. Check the player ratings and try again.";
+    });
+  }
 }
 
 function scoreStateLabel(status) {
@@ -2060,8 +2192,7 @@ function clearUncertainScoreSave(date, setNumber) {
 }
 
 function sameScoreSnapshot(left, right) {
-  return JSON.stringify(left.map(score => String(score || "")))
-    === JSON.stringify(right.map(score => String(score || "")));
+  return window.PBTRKRScoreState.scoreSnapshotsMatch(left, right);
 }
 
 function priorScoreSaveUnconfirmedError() {
@@ -2108,9 +2239,11 @@ function scoreSaveStateBackgroundNotification() {
 
 function scoreSaveStateBackgroundRefresh() {
   window.PBTRKRScoreState.runBackground(async () => {
+    clearMemoryCache();
+    await loadPlayers(true);
     const trend = await callAPI({ action: "getUserTrend" }, { force: true });
     if (Array.isArray(trend)) globalData.trend = trend;
-    if (document.getElementById("dashboard")?.classList.contains("active")) {
+    if (document.getElementById("input")?.classList.contains("active")) {
       await renderDashboardAnalytics(selectedPlayer);
     }
   }, error => console.warn("Score committed, but background analytics refresh failed:", error));
@@ -2639,35 +2772,21 @@ async function getPredictedScoresForDay(setsData) {
   const predictions = {};
   
   for (const set of setsData) {
-    const teamA = (set.teamA || "").split("/").map(p => p.trim().toLowerCase());
-    const teamB = (set.teamB || "").split("/").map(p => p.trim().toLowerCase());
-    
-    const getPlayerPWRank = (name) => {
-      const player = playersCache.find(p => p.name.toLowerCase() === name);
-      return player?.PWRank ?? null;
-    };
-    
-const teamAPowers = teamA.map(getPlayerPWRank).filter(v => v !== null);
-const teamBPowers = teamB.map(getPlayerPWRank).filter(v => v !== null);
-
-const teamAAvg = teamAPowers.length
-  ? teamAPowers.reduce((a, b) => a + b, 0) / teamAPowers.length
-  : null;
-
-const teamBAvg = teamBPowers.length
-  ? teamBPowers.reduce((a, b) => a + b, 0) / teamBPowers.length
-  : null;
-
-if (teamAAvg === null || teamBAvg === null) {
-  continue;
-}
+    const prediction = await window.PBTRKRPredictions.buildSetPrediction(
+      set,
+      playersCache,
+      getSetScores(set),
+      calculatePredictedScore,
+      calculateSetRatings
+    );
+    if (!prediction.available) continue;
 
     const scores = getSetScores(set);
     scores.forEach((score, idx) => {
       const key = `${set.set}-${idx}`;
       if (!/^\d+-\d+$/.test(String(score || "").trim())) {
         // No score yet, generate prediction
-        predictions[key] = calculatePredictedScore(teamAAvg, teamBAvg);
+        predictions[key] = prediction.forecastScore;
       }
     });
   }
@@ -3657,8 +3776,8 @@ function getPlayerRatingsFromCache(name) {
   }
 
   return {
-    dupr: Number.isFinite(Number(player.DUPR)) ? Number(player.DUPR) : null,
-    pwRank: Number.isFinite(Number(player.PWRank)) ? Number(player.PWRank) : null
+    dupr: window.pbtrkrDataService.numericRating(player.DUPR),
+    pwRank: window.pbtrkrDataService.numericRating(player.PWRank)
   };
 }
 
@@ -3880,27 +3999,29 @@ async function onRankingsPlayerChange() {
 }
 
 async function ultraSmartRefresh() {
-  if (isEditingScores) return;
-  if (Object.keys(optimisticUpdates).length > 0) return; // 🔥 ADD THIS
-  if (isDayComplete()) return;
-  if (document.visibilityState !== "visible") return;
-  if (Date.now() < scheduleRefreshPausedUntil) return;
-  if (document.activeElement?.classList?.contains("player-input")) return;
+  return window.pbtrkrDataService.runSingleFlight("ultraSmartRefresh", async () => {
+    if (!appBootComplete || dataUnavailable || isEditingScores) return;
+    if (Object.keys(optimisticUpdates).length > 0) return;
+    if (isDayComplete()) return;
+    if (document.visibilityState !== "visible") return;
+    if (Date.now() < scheduleRefreshPausedUntil) return;
+    if (document.activeElement?.classList?.contains("player-input")) return;
 
-  const meta = await callAPI({ action: "lastUpdated" }, { force: true });
+    try {
+      const meta = await callAPI({ action: "lastUpdated" }, { force: true });
+      if (!meta || meta === lastMetaSeen) return;
 
-  // 🔥 FIX: stop loop
-  if (!meta || meta === lastMetaSeen) return;
+      lastMetaSeen = meta;
+      console.log("⚡ Updating FULL DATA (batch)");
 
-  lastMetaSeen = meta;
-
-  console.log("⚡ Updating FULL DATA (batch)");
-
-  await loadAllData();
-
-  loadTodaySetsAll();
-  loadRankings();
-  if (meta.scheduleChanged) loadSchedule();
+      await loadAllData();
+      loadTodaySetsAll();
+      loadRankings();
+      if (meta.scheduleChanged) loadSchedule();
+    } catch (error) {
+      showDataUnavailable(error);
+    }
+  });
 }
 
 function unlockPlayer(btn, date, col) {
@@ -4745,6 +4866,7 @@ function updateScore(set, gameIndex, input) {
   const match = globalData.sets?.find(item => Number(item.set) === Number(set));
   if (match) match.scores[gameIndex] = score;
   isEditingScores = false;
+  updateSetPrediction(set);
 }
 
 async function getAllSets() {
@@ -5712,8 +5834,8 @@ async function renderDashboardAnalytics(player) {
     await loadPlayers();
   }
   const ratingData = getPlayerRatingsFromCache(pl);
-  const playerPowerRating = Number(ratingData.pwRank || 0);
-  const playerDupr = Number(ratingData.dupr || 0);
+  const playerPowerRating = ratingData.pwRank;
+  const playerDupr = ratingData.dupr;
 
   const dropdownSorted = sortPlayersForDropdown(trend);
   lastModalBuildStats = buildPlayerStats(allSets);
@@ -5783,12 +5905,12 @@ async function renderDashboardAnalytics(player) {
 
         <div class="stat bite-strength-stat" role="button" tabindex="0" onclick="handleAnalyticsStatClick('biteStrength')">
           <div class="stat-title">Power Rating</div>
-          <div class="stat-value">${playerPowerRating.toFixed(2)}</div>
+          <div class="stat-value">${playerPowerRating === null ? "Unavailable" : playerPowerRating.toFixed(2)}</div>
         </div>
 
         <div class="stat dupr-alt-stat" role="button" tabindex="0" onclick="handleAnalyticsStatClick('duprRating')">
           <div class="stat-title">DUPR Alternative</div>
-          <div class="stat-value">${playerDupr.toFixed(3)}</div>
+          <div class="stat-value">${playerDupr === null ? "Unavailable" : playerDupr.toFixed(3)}</div>
         </div>
 
       </div>
@@ -5946,11 +6068,7 @@ window.addEventListener("popstate", () => {
 });
 
 document.addEventListener("DOMContentLoaded", async () => {
-  try {
-    await initApp();
-  } catch (err) {
-    console.error("LOAD FAILED", err);
-  }
+  await initApp();
 });
 
 async function preloadData() {
@@ -5962,12 +6080,6 @@ async function preloadData() {
 
 window.addEventListener("load", async () => {
   console.log("🚀 App starting");
-
-  try {
-    await initApp();
-  } catch (e) {
-    console.error("Startup crash:", e);
-  }
 
   if (!refreshLoopStarted) {
     refreshLoopStarted = true;
