@@ -10,6 +10,7 @@
   const singleFlightRequests = new Map();
   const SCORE_SAVE_RPC_TIMEOUT_MS = 60000;
   const SCORE_RECONCILIATION_TIMEOUT_MS = 15000;
+  const SCORE_REQUEST_RESOLUTION_TIMEOUT_MS = 15000;
   const storage = () => (root.localStorage || {
     getItem: () => null,
     setItem: () => undefined,
@@ -491,8 +492,11 @@
     const startedAt = Date.now();
     const saveRequestId = options.saveRequestId || null;
     const isScoreSaveRpc = name === "pbtrkr_save_set_full_once" || name === "pbtrkr_save_set_full";
+    const isScoreRequestResolutionRpc = name === "pbtrkr_resolve_score_save_request";
     const timeoutMs = options.timeoutMs ?? (isScoreSaveRpc ? SCORE_SAVE_RPC_TIMEOUT_MS : 15000);
-    const eventPrefix = isScoreSaveRpc ? "save.rpc" : "supabase.rpc";
+    const eventPrefix = isScoreSaveRpc
+      ? "save.rpc"
+      : isScoreRequestResolutionRpc ? "save.recovery.request" : "supabase.rpc";
     const rpcStarted = {
       saveRequestId,
       event: `${eventPrefix}.started`,
@@ -526,7 +530,9 @@
       const response = await awaitSupabaseRequest(
         request,
         timeoutMs,
-        "PBTRKR_SAVE_TIMEOUT",
+        isScoreRequestResolutionRpc
+          ? "PBTRKR_SAVE_REQUEST_RESOLUTION_TIMEOUT"
+          : "PBTRKR_SAVE_TIMEOUT",
         { saveRequestId, rpcName: name, eventPrefix }
       );
       const { data, error } = response;
@@ -637,7 +643,9 @@
       rpcName: context.rpcName || null,
       ...(context.identity ? { identity: context.identity } : {})
     };
-    if (context.eventPrefix === "save.rpc" || context.eventPrefix === "save.reconciliation") {
+    if (context.eventPrefix === "save.rpc"
+      || context.eventPrefix === "save.reconciliation"
+      || context.eventPrefix === "save.recovery.request") {
       const event = `${context.eventPrefix}.timeout_timer.started`;
       console.info(event, {
         ...timerContext,
@@ -652,7 +660,9 @@
             const timeoutError = new Error(`Supabase request timed out after ${timeoutMs}ms`);
             timeoutError.code = errorCode;
             controller.abort();
-            if (context.eventPrefix === "save.rpc" || context.eventPrefix === "save.reconciliation") {
+            if (context.eventPrefix === "save.rpc"
+              || context.eventPrefix === "save.reconciliation"
+              || context.eventPrefix === "save.recovery.request") {
               const event = `${context.eventPrefix}.timeout_timer.expired`;
               console.warn(event, {
                 ...timerContext,
@@ -830,8 +840,81 @@
       matches,
       set: current,
       persistedScores,
-      persistedScoresRaw
+      persistedScoresRaw,
+      candidateCount: candidates.length
     };
+  }
+
+  async function resolveScoreSaveRequest(request) {
+    const matchDate = dateToIso(request?.date);
+    const setNumber = String(request?.setNumber ?? "");
+    const saveRequestId = String(request?.saveRequestId ?? "");
+    if (!matchDate || !setNumber || !saveRequestId
+      || !Array.isArray(request?.scores)
+      || !Array.isArray(request?.expectedScores)
+      || !Array.isArray(request?.ratingUpdates)) {
+      throw new Error("Exact score-save request data is required to resolve its outcome.");
+    }
+
+    const startedAt = Date.now();
+    const args = {
+      p_match_date: matchDate,
+      p_set_number: setNumber,
+      p_scores: request.scores,
+      p_expected_scores: request.expectedScores,
+      p_rating_updates: request.ratingUpdates,
+      p_device_id: deviceId(),
+      p_save_request_id: saveRequestId
+    };
+    console.info("save.recovery.request.started", {
+      saveRequestId,
+      event: "save.recovery.request.started",
+      timestamp: new Date().toISOString(),
+      date: matchDate,
+      setNumber,
+      setId: request.setId ?? null,
+      scoreCount: request.scores.length,
+      expectedScoreCount: request.expectedScores.length,
+      ratingUpdateCount: request.ratingUpdates.length,
+      timeoutMs: SCORE_REQUEST_RESOLUTION_TIMEOUT_MS
+    });
+    try {
+      const result = await rpc("pbtrkr_resolve_score_save_request", args, {
+        timeoutMs: SCORE_REQUEST_RESOLUTION_TIMEOUT_MS,
+        saveRequestId,
+        source: "save.recovery.request_resolution"
+      });
+      if (!result
+        || !["committed", "not_committed"].includes(result.status)
+        || result.fingerprint_matched !== true) {
+        throw new Error("The score-save request status response was not conclusive.");
+      }
+      console.info("save.recovery.request.completed", {
+        saveRequestId,
+        event: "save.recovery.request.completed",
+        timestamp: new Date().toISOString(),
+        durationMs: Date.now() - startedAt,
+        date: matchDate,
+        setNumber,
+        setId: request.setId ?? null,
+        outcome: result.status,
+        fingerprintMatched: result.fingerprint_matched === true
+      });
+      return result;
+    } catch (error) {
+      console.warn("save.recovery.request.failed", {
+        saveRequestId,
+        event: "save.recovery.request.failed",
+        timestamp: new Date().toISOString(),
+        durationMs: Date.now() - startedAt,
+        date: matchDate,
+        setNumber,
+        setId: request.setId ?? null,
+        errorCode: safeErrorCode(error),
+        outcome: "unknown"
+      });
+      throw error;
+    }
   }
 
   async function isDeviceAuthorized(id = deviceId()) {
@@ -1206,6 +1289,7 @@
     todayIso,
     SCORE_SAVE_RPC_TIMEOUT_MS,
     SCORE_RECONCILIATION_TIMEOUT_MS,
+    SCORE_REQUEST_RESOLUTION_TIMEOUT_MS,
     deviceId,
     legacyDate,
     scheduleWeekday,
@@ -1220,6 +1304,7 @@
     magicLinkErrorMessage,
     getCanonicalPlayerKey,
     reconcileSetSave,
+    resolveScoreSaveRequest,
     getSchedule,
     getSets,
     getAllSets,
