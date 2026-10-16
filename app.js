@@ -794,8 +794,8 @@ function normalizePlayerLookupName(name) {
     .toLowerCase();
 }
 
-async function loadPlayers() {
-  const loadedPlayers = await callAPI({ action: "getPlayers" });
+async function loadPlayers(forceRefresh = false) {
+  const loadedPlayers = await callAPI({ action: "getPlayers" }, { force: forceRefresh });
   playersCache = Array.isArray(loadedPlayers)
     ? loadedPlayers.filter(player => normalizePlayerLookupName(player?.name) !== "")
     : [];
@@ -1272,6 +1272,7 @@ async function saveSet(setNumber) {
   let attemptedExpectedScores = [];
   let attemptedRatingUpdates = [];
   let uncertainSaveRecord = null;
+  let saveAttemptPersisted = false;
   let validationStartedAt = 0;
   let validationCompleted = false;
   const saveStartedAt = Date.now();
@@ -1340,6 +1341,76 @@ async function saveSet(setNumber) {
       saveButtonDisabled: true
     });
     saveSnapshot = scoreSaveStates.snapshot(setNumber, scores);
+    const submitWithRatingConflictRecovery = async (
+      context,
+      requestedScores,
+      expectedScores,
+      ratingUpdates,
+      requestId,
+      source
+    ) => {
+      try {
+        return await submitScoreSave(
+          context, requestedScores, expectedScores, ratingUpdates, requestId, source
+        );
+      } catch (error) {
+        if (error?.code !== "40001"
+          || !String(error.message || "").includes("Player ratings changed during score save; reload and retry")) {
+          throw error;
+        }
+
+        console.warn("save.rating_conflict.refresh_started", {
+          saveRequestId: requestId,
+          event: "save.rating_conflict.refresh_started",
+          timestamp: new Date().toISOString(),
+          date: window.pbtrkrDataService.dateToIso(context.date),
+          setNumber: String(context.setNumber),
+          retryCount: 1
+        });
+        const refreshedRatingUpdates = await buildRatingUpdatesForSet(
+          context.setNumber,
+          requestedScores,
+          true
+        );
+        attemptedRatingUpdates = refreshedRatingUpdates;
+        uncertainSaveRecord = {
+          date: context.date,
+          setNumber: String(context.setNumber),
+          setId: context.setId ?? null,
+          scores: requestedScores.map(score => String(score || "")),
+          expectedScores: expectedScores.map(score => String(score || "")),
+          ratingUpdates: refreshedRatingUpdates,
+          saveRequestId: requestId
+        };
+        saveUncertainScoreSave(
+          context,
+          requestedScores,
+          requestId,
+          refreshedRatingUpdates,
+          "in_flight",
+          expectedScores
+        );
+        saveAttemptPersisted = true;
+        console.info("save.rating_conflict.refresh_completed", {
+          saveRequestId: requestId,
+          event: "save.rating_conflict.refresh_completed",
+          timestamp: new Date().toISOString(),
+          date: window.pbtrkrDataService.dateToIso(context.date),
+          setNumber: String(context.setNumber),
+          ratingUpdateCount: refreshedRatingUpdates.length,
+          retryCount: 1,
+          sameSaveRequestId: true
+        });
+        return submitScoreSave(
+          context,
+          requestedScores,
+          expectedScores,
+          refreshedRatingUpdates,
+          requestId,
+          `${source}.rating_conflict_retry`
+        );
+      }
+    };
     const pendingSave = readUncertainScoreSave(saveContext.date, setNumber);
     if (pendingSave) {
       uncertainSaveRecord = pendingSave;
@@ -1349,7 +1420,7 @@ async function saveSet(setNumber) {
         && Array.isArray(pendingSave.ratingUpdates)) {
         let recoveryResult;
         try {
-          recoveryResult = await submitScoreSave(
+          recoveryResult = await submitWithRatingConflictRecovery(
             {
               date: pendingSave.date,
               setNumber: pendingSave.setNumber,
@@ -1536,7 +1607,7 @@ async function saveSet(setNumber) {
         );
         let recoveryResult;
         try {
-          recoveryResult = await submitScoreSave(
+          recoveryResult = await submitWithRatingConflictRecovery(
             {
               date: pendingSave.date,
               setNumber: pendingSave.setNumber,
@@ -1658,7 +1729,7 @@ async function saveSet(setNumber) {
         );
         let recoveryResult;
         try {
-          recoveryResult = await submitScoreSave(
+          recoveryResult = await submitWithRatingConflictRecovery(
             saveContext,
             unknownScores,
             reconciliation.persistedScores,
@@ -1700,7 +1771,7 @@ async function saveSet(setNumber) {
     saveSnapshot.forEach(item => updateScoreSaveIndicator(setNumber, item.gameIndex));
 
     const ratingUpdates = window.PBTRKR_USE_SUPABASE_DATA === true
-      ? await buildRatingUpdatesForSet(setNumber, scores)
+      ? await buildRatingUpdatesForSet(setNumber, scores, true)
       : [];
     attemptedRatingUpdates = ratingUpdates;
     saveUncertainScoreSave(
@@ -1709,7 +1780,7 @@ async function saveSet(setNumber) {
     saveAttemptPersisted = true;
     rpcOutcome = "started";
     lastCompletedStage = "save.rpc.started";
-    const res = await submitScoreSave(
+    const res = await submitWithRatingConflictRecovery(
       saveContext,
       scores,
       attemptedExpectedScores,
@@ -1727,7 +1798,7 @@ async function saveSet(setNumber) {
     finalOutcome = "confirmed";
     clearUncertainScoreSave(saveContext.date, setNumber);
     scoreSaveStates.markSaved(saveSnapshot);
-    applyCommittedSetScores(setNumber, scores, saveSnapshot, ratingUpdates);
+    applyCommittedSetScores(setNumber, scores, saveSnapshot, attemptedRatingUpdates);
     updateSetSaveIndicators(setNumber, scores.length);
     console.info("save.ui.changed", {
       saveRequestId,
@@ -2045,8 +2116,10 @@ function scoreSaveStateBackgroundRefresh() {
   }, error => console.warn("Score committed, but background analytics refresh failed:", error));
 }
 
-async function buildRatingUpdatesForSet(setNumber, scores) {
-  if (!Array.isArray(playersCache) || !playersCache.length) await loadPlayers();
+async function buildRatingUpdatesForSet(setNumber, scores, forceRefresh = false) {
+  if (forceRefresh || !Array.isArray(playersCache) || !playersCache.length) {
+    await loadPlayers(forceRefresh);
+  }
   const existing = (globalData.sets || []).find(set => Number(set.set) === Number(setNumber));
   if (!existing) return [];
 

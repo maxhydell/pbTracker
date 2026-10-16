@@ -245,8 +245,6 @@
         return {
           ...player,
           id: row.id,
-          DUPR: row.DUPR,
-          PWRank: row.PWRank,
           phone: row.phone ?? "",
           order_index: row.order_index
         };
