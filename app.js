@@ -1248,6 +1248,17 @@ async function callAPI(params, options = {}) {
   }
 }
 
+function scoreStateLabel(status) {
+  const labels = {
+    unsaved: "Score not saved",
+    saving: "Saving score",
+    saved: "Score saved",
+    error: "Score save failed",
+    unknown: "Score save status unknown"
+  };
+  return labels[status] || labels.unknown;
+}
+
 function renderSetsInto(container, data, opts = {}) {
   if (!container) return;
   const locked = opts.locked === true || isDayComplete();
