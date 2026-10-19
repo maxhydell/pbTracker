@@ -1412,8 +1412,59 @@ async function loadTodaySetsAll() {
     document.getElementById("setsList")
   ].filter(Boolean);
   targets.forEach(el => renderSetsInto(el, data, { locked }));
+  try {
+    await addPredictedScorePlaceholders(data);
+  } catch (error) {
+    console.warn("Score placeholders are unavailable:", error);
+  }
   restoreResultsIfAny();
   updateDoneUiVisibility();
+}
+
+async function addPredictedScorePlaceholders(setsData) {
+  if (!Array.isArray(setsData)) return;
+  if (!playersCache.length) await loadPlayers();
+  if (!playersCache.length) return;
+
+  const predictions = await getPredictedScoresForDay(setsData);
+  window.PBTRKRPredictions.entries(predictions).forEach(([key, predicted]) => {
+    const [setNumber, gameIndex] = key.split("-").map(Number);
+    const cards = document.querySelectorAll(
+      `.match-card[data-set="${setNumber}"][data-game="${gameIndex}"]`
+    );
+    cards.forEach(card => {
+      const inputs = card.querySelectorAll("input");
+      if (inputs[0] && inputs[0].value === "") {
+        inputs[0].placeholder = String(predicted.teamA);
+      }
+      if (inputs[1] && inputs[1].value === "") {
+        inputs[1].placeholder = String(predicted.teamB);
+      }
+    });
+  });
+}
+
+async function getPredictedScoresForDay(setsData) {
+  if (!Array.isArray(setsData) || !Array.isArray(playersCache)) return {};
+
+  const predictions = {};
+  for (const set of setsData) {
+    const prediction = await window.PBTRKRPredictions.buildSetPrediction(
+      set,
+      playersCache,
+      getSetScores(set),
+      calculatePredictedScore,
+      calculateSetRatings
+    );
+    if (!prediction.available) continue;
+
+    getSetScores(set).forEach((score, gameIndex) => {
+      if (!/^\d+-\d+$/.test(String(score || "").trim())) {
+        predictions[`${set.set}-${gameIndex}`] = prediction.forecastScore;
+      }
+    });
+  }
+  return predictions;
 }
 
 function updateDoneUiVisibility() {
@@ -2014,6 +2065,18 @@ function updateSetSaveIndicators(setNumber, gameCount) {
   }
   const btn = document.getElementById(`save-btn-${setNumber}`);
   if (btn) btn.classList.toggle("saved", allSaved);
+}
+
+function updateScoreSaveIndicator(setNumber, gameIndex) {
+  const status = scoreSaveStates.get(setNumber, gameIndex).status;
+  const indicator = document.querySelector(
+    `.match-card[data-set="${setNumber}"][data-game="${gameIndex}"] .score-save-state`
+  );
+  if (!indicator) return;
+  indicator.className = `score-save-state ${status}`;
+  indicator.dataset.scoreState = status;
+  indicator.setAttribute("aria-label", scoreStateLabel(status));
+  indicator.title = scoreStateLabel(status);
 }
 
 function scoreSaveStateBackgroundNotification() {
