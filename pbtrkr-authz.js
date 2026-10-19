@@ -1,6 +1,6 @@
 (function attachPbtrkrAuthorization(root) {
-  const SUPERADMIN_USER_ID = "29184436-bd03-4239-8f8a-7f2afa10aeb6";
-  const ADMIN_ROLES = new Set(["pbtrkr_admin", "clinic_admin", "pbtrkr_superadmin", "superadmin"]);
+  const ADMIN_ROLE = "clinic_admin";
+  const ADMIN_ROLES = new Set([ADMIN_ROLE]);
 
   function normalizeRole(role) {
     return typeof role === "string" ? role.trim().toLowerCase() : "";
@@ -26,26 +26,20 @@
   }
 
   function isPbtrkrEditorRole(role) {
-    const roles = normalizeRoleList(role);
-    return roles.some(normalizedRole => normalizedRole === "pbtrkr_editor" || ADMIN_ROLES.has(normalizedRole));
+    return isAdminRole(role);
   }
 
   function userRoles(user) {
     const appMetadata = user?.app_metadata || {};
-    return normalizeRoleList([
-      user?.role,
-      user?.roles,
-      appMetadata?.role,
-      appMetadata?.roles
-    ]);
+    return normalizeRoleList([appMetadata?.role, appMetadata?.roles]);
   }
 
   function isAdminUser(user) {
-    return user?.id === SUPERADMIN_USER_ID || isAdminRole(userRoles(user));
+    return isAdminRole(userRoles(user));
   }
 
   function isPbtrkrEditorUser(user) {
-    return user?.id === SUPERADMIN_USER_ID || isPbtrkrEditorRole(userRoles(user));
+    return isAdminUser(user);
   }
 
   function getDeviceStorageContext() {
@@ -78,7 +72,7 @@
   }
 
   const api = {
-    SUPERADMIN_USER_ID,
+    ADMIN_ROLE,
     normalizeRole,
     isAdminRole,
     isPbtrkrEditorRole,

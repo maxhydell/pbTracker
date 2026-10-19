@@ -57,6 +57,22 @@
   <div class="top-bar">
     <div class="menu-btn" onclick="toggleMenu()">☰</div>
     <div class="title">Pickleball Tracker</div>
+    <div class="account-menu" id="accountMenu">
+      <button class="account-button" id="accountButton" type="button" aria-haspopup="dialog" aria-expanded="false">Loading account…</button>
+      <section class="account-popover" id="accountPopover" role="dialog" aria-label="Account" hidden>
+        <span class="account-popover-title">Account</span>
+        <strong class="account-popover-email" id="accountEmail"></strong>
+        <div class="account-role-row"><span>Role</span><strong id="accountRole">Account</strong></div>
+        <p class="account-status" id="accountMessage" role="status" aria-live="polite"></p>
+        <div class="account-sign-in" id="accountSignIn" hidden>
+          <label for="accountSignInEmail">Email address</label>
+          <input id="accountSignInEmail" type="email" autocomplete="email" placeholder="you@example.com">
+          <button class="account-sign-in-submit" id="accountSignInSubmit" type="button">Send secure sign-in link</button>
+          <p id="accountSignInMessage" role="status" aria-live="polite"></p>
+        </div>
+        <button class="account-sign-out" id="accountSignOut" type="button" hidden>Sign Out</button>
+      </section>
+    </div>
   </div>
 
   <div id="dataUnavailable" class="data-unavailable-banner" role="alert" aria-live="polite" hidden>
@@ -72,6 +88,7 @@
       <button onclick="navigate('players')">👥 Players</button>
       <button onclick="navigate('schedule')">📅 Schedule</button>
       <button onclick="navigate('sets')">🎾 Sets</button>
+      <button id="trackVisitorsMenuLink" onclick="navigate('track')" hidden>📈 Visitor Tracking</button>
       <button onclick="openShare()">🔗 Share</button>
     </div>
 
@@ -185,6 +202,26 @@
   <div id="players" class="page">
     <h1>Players</h1>
     <div id="playersContainer"></div>
+  </div>
+
+  <div id="track" class="page">
+    <div class="tracking-page-heading">
+      <div>
+        <span class="tracking-eyebrow">PBTRKR ANALYTICS</span>
+        <h1>Visitor Tracking</h1>
+        <p>Regular tracker visits only. Clinic event visits are excluded. Total is exact; activity breakdowns use the latest 500 visits.</p>
+      </div>
+      <button class="tracking-refresh" id="trackingRefresh" type="button" onclick="loadVisitorAnalytics()">Refresh</button>
+    </div>
+    <div class="tracking-state" id="trackingState" role="status" aria-live="polite">Checking administrator access…</div>
+    <div class="tracking-content" id="trackingContent" hidden>
+      <div class="tracking-summary" id="trackingSummary"></div>
+      <div class="tracking-analytics" id="trackingAnalytics"></div>
+      <section class="tracking-recent">
+        <div class="tracking-section-heading"><div><span class="tracking-eyebrow">LATEST ACTIVITY</span><h2>Recent visitors</h2></div><span id="trackingRecentCount"></span></div>
+        <div class="tracking-visitor-list" id="trackingVisitorList"></div>
+      </section>
+    </div>
   </div>
 
   <!-- Share Modal -->

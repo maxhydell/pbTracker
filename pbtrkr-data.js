@@ -259,7 +259,7 @@
       return "Too many sign-in link requests. Wait a few minutes before requesting another link.";
     }
     if (code === "user_not_found" || status === 404 || message.includes("user not found") || message.includes("signups not allowed for otp")) {
-      return "This email does not have a provisioned Supabase account. Ask a PBTRKR administrator to provision the user and assign its trusted app_metadata.role.";
+      return "This email does not have a provisioned Supabase account. Ask a PBTRKR administrator to provision the user and assign the trusted clinic_admin role in app_metadata.";
     }
     return "Unable to send the sign-in link. Check the email address and try again later.";
   }

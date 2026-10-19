@@ -68,6 +68,13 @@ let rankingsComponentsReady = false;
 let deviceId = null;
 let lastMetaSeen = null;
 let cachedVisitorContext = null;
+let authorizationState = "authorization_unavailable";
+let currentAuthUser = null;
+let visitorTrackingInFlight = false;
+let lastTrackedPageView = "";
+let lastVisitorTrackingAt = 0;
+let pendingVisitorPageView = null;
+let visitorAnalyticsRequest = 0;
 function log(label, data) {
   console.log("🔥", label, data);
 }
@@ -215,72 +222,48 @@ function getOrCreateDeviceId() {
 async function checkDeviceWhitelist() {
   try {
     if (window.PBTRKR_USE_SUPABASE_DATA !== true) {
+      authorizationState = "account_admin";
       setEditingLockState(false);
-      localStorage.setItem(LS_DEVICE_VERIFIED, "1");
+      updateAccountControl(null);
       return;
     }
 
-    updateLoadingProgress(15, "Verifying device...");
-
-    const id = getOrCreateDeviceId();
-
     if (!window.supabaseClient) {
-      console.warn("⚠️ Supabase client not available, cannot check whitelist");
+      authorizationState = "authorization_unavailable";
+      currentAuthUser = null;
       setEditingLockState(true);
       localStorage.removeItem(LS_DEVICE_VERIFIED);
+      updateAccountControl(null);
       return;
     }
 
     const { data: authData, error: authError } = await window.supabaseClient.auth.getSession();
     const session = authData?.session;
-    const user = session?.user;
-    if (authError || !session) {
-      setEditingLockState(true);
-      localStorage.removeItem(LS_DEVICE_VERIFIED);
-      setTimeout(() => showAccessRestrictionPopup("Sign in with your provisioned PBTRKR account to continue."), 500);
-      return;
-    }
-    if (!window.PBTRKRAuthorization?.isPbtrkrEditorUser(user)) {
-      setEditingLockState(true);
-      localStorage.removeItem(LS_DEVICE_VERIFIED);
-      setTimeout(() => showAccessRestrictionPopup("This account lacks a trusted PBTRKR role. Ask an administrator to provision the user and assign app_metadata.role."), 500);
-      return;
-    }
+    if (authError) throw authError;
 
-    if (!window.pbtrkrDataService) {
-      throw new Error("PBTRKR Supabase data service is unavailable");
-    }
-    const authorized = await window.pbtrkrDataService.isDeviceAuthorized(id);
+    currentAuthUser = session?.user || null;
+    authorizationState = currentAuthUser
+      ? (window.PBTRKRAuthorization?.isAdminUser(currentAuthUser) ? "account_admin" : "signed_in_non_admin")
+      : "unauthorized_device_account";
+    const authorized = authorizationState === "account_admin" && !dataUnavailable;
+    setEditingLockState(!authorized);
+    localStorage.removeItem(LS_DEVICE_VERIFIED);
+    updateAccountControl(currentAuthUser);
+    if (!authorized) clearVisitorAnalyticsView("Visitor analytics require a signed-in clinic_admin account.");
 
-    if (authorized && !dataUnavailable) {
-      setEditingLockState(false);
-      localStorage.setItem(LS_DEVICE_VERIFIED, "1");
+    if (authorized) {
       clearAccessRestrictionPopups();
-      console.info("pbtrkr.device.authorization.checked", {
-        event: "pbtrkr.device.authorization.checked",
-        identityType: "browser_device_id",
-        authorizationSource: "pbtrkr_device_is_whitelisted",
-        requiredRole: "pbtrkr_editor_or_admin",
-        requiredRecords: ["device_whitelist", "pbtrkr_device_authorizations"],
-        outcome: "authorized"
-      });
-    } else {
-      setEditingLockState(true);
-      localStorage.removeItem(LS_DEVICE_VERIFIED);
-      console.warn("pbtrkr.device.authorization.checked", {
-        event: "pbtrkr.device.authorization.checked",
-        identityType: "browser_device_id",
-        authorizationSource: "pbtrkr_device_is_whitelisted",
-        requiredRole: "pbtrkr_editor_or_admin",
-        requiredRecords: ["device_whitelist", "pbtrkr_device_authorizations"],
-        outcome: "unauthorized"
-      });
-      setTimeout(() => {
-        showAccessRestrictionPopup("Your account is authorized, but this browser device must be approved before editing.");
-      }, 500);
+    } else if (appBootComplete && authorizationState !== "authorization_unavailable") {
+      setTimeout(() => showAccessRestrictionPopup(
+        currentAuthUser
+          ? "This account does not have the trusted clinic_admin role. Editing is limited to PBTRKR administrators."
+          : "Sign in with a trusted clinic_admin account to edit protected tracker data."
+      ), 300);
     }
 
   } catch (err) {
+    authorizationState = "authorization_unavailable";
+    currentAuthUser = null;
     console.error("pbtrkr.device.authorization.failed", {
       event: "pbtrkr.device.authorization.failed",
       errorName: /^[A-Za-z][A-Za-z0-9]{0,39}$/.test(String(err?.name || ""))
@@ -289,30 +272,163 @@ async function checkDeviceWhitelist() {
       ...safeSaveErrorLogDetails(err)
     });
     setEditingLockState(true);
+    localStorage.removeItem(LS_DEVICE_VERIFIED);
+    updateAccountControl(null);
+    clearVisitorAnalyticsView("Administrator access could not be verified. Try again when the authorization service is available.");
   }
 }
 
 if (window.supabaseClient?.auth?.onAuthStateChange) {
-  window.supabaseClient.auth.onAuthStateChange(() => {
+  window.supabaseClient.auth.onAuthStateChange((_event, session) => {
     setEditingLockState(true);
     localStorage.removeItem(LS_DEVICE_VERIFIED);
+    currentAuthUser = session?.user || null;
+    updateAccountControl(currentAuthUser);
+    if (!window.PBTRKRAuthorization?.isAdminUser(currentAuthUser)) {
+      clearVisitorAnalyticsView("Visitor analytics require a signed-in clinic_admin account.");
+    }
     if (appBootComplete) {
       checkDeviceWhitelist().then(() => {
         lockEditingIfNeeded();
-        if (document.getElementById("players")?.classList.contains("active")) loadPlayersList();
+        if (!isEditingLocked) {
+          const activePage = document.querySelector(".page.active")?.id;
+          if (activePage === "input" || activePage === "sets") loadTodaySetsAll();
+          if (activePage === "schedule") loadSchedule();
+          if (activePage === "players") loadPlayersList();
+        }
+        if (document.getElementById("track")?.classList.contains("active")) loadVisitorAnalytics();
       });
     }
   });
 }
 
 function isPlayersPageAccessAllowed() {
-  getOrCreateDeviceId();
   if (window.PBTRKR_USE_SUPABASE_DATA !== true) return true;
-  if (!window.supabaseClient) return false;
-  return !isEditingLocked && localStorage.getItem(LS_DEVICE_VERIFIED) === "1";
+  return authorizationState === "account_admin" && !isEditingLocked;
+}
+
+function clearVisitorAnalyticsView(message = "Checking administrator access…") {
+  const state = document.getElementById("trackingState");
+  const content = document.getElementById("trackingContent");
+  if (state) {
+    state.textContent = message;
+    state.hidden = false;
+    delete state.dataset.loaded;
+  }
+  if (content) {
+    content.hidden = true;
+    document.getElementById("trackingSummary")?.replaceChildren();
+    document.getElementById("trackingAnalytics")?.replaceChildren();
+    document.getElementById("trackingVisitorList")?.replaceChildren();
+  }
+}
+
+function updateAccountControl(user) {
+  const button = document.getElementById("accountButton");
+  const email = document.getElementById("accountEmail");
+  const role = document.getElementById("accountRole");
+  const signIn = document.getElementById("accountSignIn");
+  const signOut = document.getElementById("accountSignOut");
+  const accountMessage = document.getElementById("accountMessage");
+  const menuLink = document.getElementById("trackVisitorsMenuLink");
+  if (!button) return;
+
+  const isAdmin = window.PBTRKRAuthorization?.isAdminUser(user) === true;
+  const signedIn = Boolean(user);
+  button.textContent = signedIn ? (user.email || "Account") : "Sign In";
+  button.title = signedIn ? "Manage your PBTRKR account" : "Sign in to PBTRKR";
+  if (email) email.textContent = user?.email || (signedIn ? "Account" : "Not signed in");
+  if (role) {
+    role.textContent = isAdmin
+      ? "Clinic Administrator"
+      : signedIn
+        ? "Account"
+        : authorizationState === "authorization_unavailable"
+          ? "Authorization unavailable"
+          : "No signed-in account";
+  }
+  if (signIn) signIn.hidden = signedIn;
+  if (signOut) signOut.hidden = !signedIn;
+  if (menuLink) menuLink.hidden = !isAdmin;
+  if (accountMessage) {
+    accountMessage.textContent = signedIn
+      ? ""
+      : authorizationState === "authorization_unavailable"
+        ? "Authorization is unavailable. Protected editing remains locked."
+        : "Device-only administrator access is unavailable until a server-verified device credential is configured.";
+  }
+}
+
+function toggleAccountPopover() {
+  const button = document.getElementById("accountButton");
+  const popover = document.getElementById("accountPopover");
+  if (!button || !popover) return;
+  const opening = popover.hidden;
+  popover.hidden = !opening;
+  button.setAttribute("aria-expanded", String(opening));
+}
+
+async function sendAccountSignInLink() {
+  const input = document.getElementById("accountSignInEmail");
+  const button = document.getElementById("accountSignInSubmit");
+  const message = document.getElementById("accountSignInMessage");
+  const email = String(input?.value || "").trim().toLowerCase();
+  if (!input || !button || !message) return;
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    message.textContent = "Enter a valid email address.";
+    return;
+  }
+  button.disabled = true;
+  message.textContent = "Sending secure sign-in link…";
+  try {
+    if (!window.pbtrkrDataService) throw new Error("Sign-in service is unavailable.");
+    const { error } = await window.pbtrkrDataService.requestExistingUserMagicLink(email, window.location.href);
+    if (error) throw error;
+    input.value = "";
+    message.textContent = "Check your email for a secure sign-in link.";
+  } catch (error) {
+    message.textContent = window.pbtrkrDataService?.magicLinkErrorMessage(error)
+      || "Could not send a sign-in link. Please try again.";
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function signOutAccount() {
+  const button = document.getElementById("accountSignOut");
+  if (button) button.disabled = true;
+  try {
+    if (!window.supabaseClient?.auth) throw new Error("Sign-out service is unavailable.");
+    const { error } = await window.supabaseClient.auth.signOut();
+    if (error) throw error;
+  } catch (error) {
+    const message = document.getElementById("accountMessage");
+    if (message) message.textContent = error?.message || "Could not sign out. Please try again.";
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+function initAccountControl() {
+  document.getElementById("accountButton")?.addEventListener("click", toggleAccountPopover);
+  document.getElementById("accountSignInSubmit")?.addEventListener("click", sendAccountSignInLink);
+  document.getElementById("accountSignOut")?.addEventListener("click", signOutAccount);
+  document.addEventListener("click", event => {
+    const menu = document.getElementById("accountMenu");
+    const popover = document.getElementById("accountPopover");
+    const button = document.getElementById("accountButton");
+    if (menu && popover && !menu.contains(event.target)) {
+      popover.hidden = true;
+      button?.setAttribute("aria-expanded", "false");
+    }
+  });
+  updateAccountControl(null);
+  checkDeviceWhitelist();
 }
 
 async function loadCriticalPageData(pageId) {
+  if (pageId === "track") return;
+
   if (pageId === "rankings") {
     updateLoadingProgress(35, "Loading rankings...");
 
@@ -472,6 +588,12 @@ function queueBackgroundStartup(pageId) {
 
       await checkDeviceWhitelist();
       lockEditingIfNeeded();
+      if (!isEditingLocked) {
+        if (pageId === "input" || pageId === "sets") await loadTodaySetsAll();
+        if (pageId === "schedule") await loadSchedule();
+        if (pageId === "players") await loadPlayersList();
+      }
+      if (document.getElementById("track")?.classList.contains("active")) await loadVisitorAnalytics();
       trackVisitor();
     } catch (err) {
       console.error("Background startup failed:", err);
@@ -489,7 +611,7 @@ function clearAccessRestrictionPopups() {
   document.querySelectorAll('[id^="accessRestrictionPopup-"]').forEach(element => element.remove());
 }
 
-function showAccessRestrictionPopup(message = "Sign in with your approved PBTRKR editor email to edit tracker data.") {
+function showAccessRestrictionPopup(message = "Sign in with a trusted clinic_admin account to edit protected tracker data.") {
   if (window.PBTRKR_USE_SUPABASE_DATA !== true) {
     isEditingLocked = false;
     clearAccessRestrictionPopups();
@@ -519,7 +641,7 @@ function showAccessRestrictionPopup(message = "Sign in with your approved PBTRKR
           <h3>⚠️ Editing Access Required</h3>
           <p>${escapeHtml(message)}</p>
           <div style="margin-top: 15px;">
-            <input id="${inputId}" type="email" autocomplete="email" placeholder="Editor email" class="onboard-input" onkeypress="if(event.key==='Enter') verifyAccessCode()" />
+            <input id="${inputId}" type="email" autocomplete="email" placeholder="Administrator email" class="onboard-input" onkeypress="if(event.key==='Enter') verifyAccessCode()" />
             <button onclick="verifyAccessCode()" style="margin-top: 10px; width: 100%; padding: 10px; background: #4fc3ff; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; color: #000;">Send secure sign-in link</button>
             <button id="approveDeviceBtn-${pageId}" onclick="approveCurrentDevice()" style="display:none; margin-top: 10px; width: 100%; padding: 10px; background: #24364a; border: 1px solid #4fc3ff; border-radius: 6px; cursor: pointer; font-weight: bold; color: #eaf7ff;">Approve this device</button>
           </div>
@@ -557,7 +679,7 @@ async function verifyAccessCode() {
     document.getElementById("playersAccessCode")
   ].find(input => input && String(input.value || "").trim());
   if (!inputEl) {
-    alert("Enter the email for your provisioned PBTRKR account.");
+    alert("Enter the email for your provisioned PBTRKR administrator account.");
     return;
   }
   if (!window.supabaseClient || !window.pbtrkrDataService) {
@@ -598,7 +720,7 @@ async function verifyAccessCode() {
   }
 
   inputEl.value = "";
-  alert("A secure sign-in link was sent to your email. After signing in, this device must be approved by a PBTRKR admin.");
+  alert("A secure sign-in link was sent. Protected editing will unlock after the signed-in account is verified as clinic_admin.");
 }
 
 function showAccessUnlockedMessage() {
@@ -726,7 +848,7 @@ function getRoutePage() {
   const params = new URLSearchParams(window.location.search);
   const page = params.get("page");
 
-  if (["input", "rankings", "schedule", "sets", "players"].includes(page)) {
+  if (["input", "rankings", "schedule", "sets", "players", "track"].includes(page)) {
     return page;
   }
 
@@ -1004,6 +1126,11 @@ function showPage(id, options = {}) {
  // document.getElementById("overlay").classList.remove("show");
 
   if (options.skipPageLoad) {
+    return;
+  }
+
+  if (id === "track") {
+    loadVisitorAnalytics();
     return;
   }
 
@@ -2109,22 +2236,8 @@ function getTodayEventId() {
 }
 
 async function ensureCurrentDeviceWhitelisted() {
-  if (!window.supabaseClient) return false;
-
-  const id = deviceId || getOrCreateDeviceId();
-
-  try {
-    if (!window.pbtrkrDataService) return false;
-    const authorized = await window.pbtrkrDataService.isDeviceAuthorized(id);
-    if (!authorized) return false;
-
-    localStorage.setItem(LS_DEVICE_VERIFIED, "1");
-    isEditingLocked = false;
-    return true;
-  } catch (err) {
-    console.error("❌ Failed to whitelist device:", err);
-    return false;
-  }
+  await checkDeviceWhitelist();
+  return authorizationState === "account_admin" && !isEditingLocked;
 }
 
 async function approveCurrentDevice() {
@@ -2146,7 +2259,7 @@ async function approveCurrentDevice() {
   } catch (err) {
     console.error("❌ Device approval failed:", err);
     alert(err?.code === "42501"
-      ? "Approval was denied. Confirm your trusted app_metadata.role is pbtrkr_admin or clinic_admin and that the PBTRKR authorization migration is applied."
+      ? "Approval was denied. Confirm your trusted app_metadata.role is clinic_admin and that the PBTRKR authorization migration is applied."
       : "Unable to approve this device.");
     return false;
   }
@@ -3098,8 +3211,8 @@ async function loadPlayersList() {
       container.innerHTML = `
         <div class="players-access-card">
           <h3>⚠️ Access Required</h3>
-          <p>Sign in with an approved PBTRKR editor account to view the players list.</p>
-          <input type="email" autocomplete="email" id="playersAccessCode" class="players-access-input" placeholder="Editor email" onkeypress="if(event.key==='Enter') verifyPlayersAccessCode()" />
+          <p>Sign in with a trusted clinic_admin account to view the players list.</p>
+          <input type="email" autocomplete="email" id="playersAccessCode" class="players-access-input" placeholder="Administrator email" onkeypress="if(event.key==='Enter') verifyPlayersAccessCode()" />
           <button class="players-access-btn" onclick="verifyPlayersAccessCode()">Send secure sign-in link</button>
         </div>
       `;
@@ -5660,8 +5773,7 @@ function attachOnboardAutocomplete(input) {
 }
 
 function navigate(page) {
-  const base = "/pbTracker/";
-  const url = new URL(window.location.origin + base);
+  const url = new URL(window.location.origin + getSiteBasePath());
 
   const currentParams = new URLSearchParams(window.location.search);
   const player =
@@ -5692,7 +5804,7 @@ function goTo(page) {
   const params = new URLSearchParams(window.location.search);
   const player = params.get("p");
 
-  const url = new URL(window.location.origin + "/pbTracker/");
+  const url = new URL(window.location.origin + getSiteBasePath());
 
   if (player) {
     url.searchParams.set("p", player);
@@ -5710,6 +5822,7 @@ window.addEventListener("popstate", () => {
 });
 
 document.addEventListener("DOMContentLoaded", async () => {
+  initAccountControl();
   await initApp();
 });
 
@@ -5765,13 +5878,29 @@ async function getVisitorIp() {
   return getOrCreateDeviceId();
 }
 
-async function trackVisitor() {
+async function trackVisitor(requestedPageView = null) {
+  const params = new URLSearchParams(requestedPageView?.query || window.location.search);
+  const page = requestedPageView?.page || params.get("page") || getRoutePage() || window.location.pathname;
+  const pageView = requestedPageView || {
+    page,
+    url: window.location.href,
+    query: window.location.search || null,
+    mode: params.get("p") || null,
+    key: `${page}|${window.location.href}`,
+    time: new Date().toISOString()
+  };
+  if (pageView.key === lastTrackedPageView && Date.now() - lastVisitorTrackingAt < 2000) return;
+  if (visitorTrackingInFlight) {
+    pendingVisitorPageView = pageView;
+    return;
+  }
+  visitorTrackingInFlight = true;
+  lastTrackedPageView = pageView.key;
+  lastVisitorTrackingAt = Date.now();
+
   try {
     const device = getOrCreateDeviceId();
-    const params = new URLSearchParams(window.location.search);
-    const page = params.get("page") || getRoutePage() || window.location.pathname;
 
-    // 🔥 get location data ONCE
     if (!cachedVisitorContext) {
       cachedVisitorContext = await getVisitorContext();
     }
@@ -5782,15 +5911,13 @@ async function trackVisitor() {
       city: cachedVisitorContext.city || null,
       region: cachedVisitorContext.region || null,
       org: cachedVisitorContext.org || null,
-      page: page || "unknown",
-      full_url: window.location.href,
-      query: window.location.search || null,
-      mode: params.get("p") || null,
-      time: new Date().toISOString(),
+      page: pageView.page || "unknown",
+      full_url: pageView.url,
+      query: pageView.query,
+      mode: pageView.mode,
+      time: pageView.time,
       userAgent: navigator.userAgent
     };
-
-    console.log("🔍 Tracking visitor:", visitor);
 
     if (window.supabaseClient) {
       const { error } = await window.supabaseClient
@@ -5798,15 +5925,158 @@ async function trackVisitor() {
           .insert([visitor]);
 
       if (error) {
-        console.error("❌ Visitor tracking error:", error);
-      } else {
-        console.log("✅ Visitor tracked");
+        console.warn("PBTRKR visitor tracking could not be recorded.", String(error.code || "").slice(0, 24));
       }
-    } else {
-      console.warn("⚠️ Supabase client not available");
     }
+  } catch {
+    // Visitor telemetry must never block app startup or page navigation.
+  } finally {
+    visitorTrackingInFlight = false;
+    if (pendingVisitorPageView) {
+      const nextPageView = pendingVisitorPageView;
+      pendingVisitorPageView = null;
+      trackVisitor(nextPageView);
+    }
+  }
+}
 
-  } catch (err) {
-    console.error("❌ Track visitor exception:", err);
+function escapeVisitorHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, character => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;"
+  })[character]);
+}
+
+function visitorCountRows(values) {
+  const counts = new Map();
+  values.forEach(value => {
+    const label = String(value || "").trim();
+    if (label) counts.set(label, (counts.get(label) || 0) + 1);
+  });
+  return Array.from(counts, ([label, count]) => ({ label, count }))
+    .sort((first, second) => second.count - first.count || first.label.localeCompare(second.label))
+    .slice(0, 5);
+}
+
+function formatVisitorTime(value) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "Time unavailable" : date.toLocaleString();
+}
+
+function renderVisitorCounts(title, values) {
+  if (!values.length) return `<section class="tracking-panel"><h2>${escapeVisitorHtml(title)}</h2><p>No data available.</p></section>`;
+  const maximum = Math.max(...values.map(item => item.count), 1);
+  return `<section class="tracking-panel"><h2>${escapeVisitorHtml(title)}</h2>${values.map(item => `
+    <div class="tracking-count-row"><span>${escapeVisitorHtml(item.label)}</span><strong>${item.count}</strong></div>
+    <div class="tracking-bar-track"><div class="tracking-bar-fill" style="width:${Math.round(item.count / maximum * 100)}%"></div></div>
+  `).join("")}</section>`;
+}
+
+function renderVisitorAnalytics(visitors, totalCount) {
+  const now = new Date();
+  const todayKey = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`;
+  const lastSevenStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6);
+  const dayKey = date => `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+  const todayVisits = visitors.filter(visitor => {
+    const time = new Date(visitor.time);
+    return !Number.isNaN(time.getTime()) && dayKey(time) === todayKey;
+  }).length;
+  const lastSevenVisits = visitors.filter(visitor => {
+    const time = new Date(visitor.time);
+    return !Number.isNaN(time.getTime()) && time >= lastSevenStart && time <= now;
+  }).length;
+  const uniqueDevices = new Set(visitors.map(visitor => String(visitor.device_id || "").trim()).filter(Boolean)).size;
+  const dailyCounts = new Map();
+  for (let offset = 6; offset >= 0; offset -= 1) {
+    const date = new Date(now.getFullYear(), now.getMonth(), now.getDate() - offset);
+    dailyCounts.set(dayKey(date), { label: date.toLocaleDateString(undefined, { weekday: "short" }), count: 0 });
+  }
+  visitors.forEach(visitor => {
+    const time = new Date(visitor.time);
+    const bucket = dailyCounts.get(dayKey(time));
+    if (bucket) bucket.count += 1;
+  });
+  const daily = Array.from(dailyCounts.values());
+  const maxDaily = Math.max(...daily.map(item => item.count), 1);
+  const locationCounts = visitorCountRows(visitors.map(visitor => [visitor.city, visitor.region].filter(Boolean).join(", ")));
+  const pageCounts = visitorCountRows(visitors.map(visitor => visitor.page));
+  const organizationCounts = visitorCountRows(visitors.map(visitor => visitor.org));
+  document.getElementById("trackingSummary").innerHTML = `
+    <article><span>Total visits</span><strong>${Number(totalCount) || 0}</strong></article>
+    <article><span>Visits today</span><strong>${todayVisits}</strong></article>
+    <article><span>Last 7 days</span><strong>${lastSevenVisits}</strong></article>
+    <article><span>Unique devices · latest 500 rows</span><strong>${uniqueDevices}</strong></article>`;
+  document.getElementById("trackingAnalytics").innerHTML = `
+    <section class="tracking-panel"><h2>Visits over time</h2><p>Daily visits · last 7 days · latest 500 rows</p>${daily.map(item => `
+      <div class="tracking-bar-row"><span>${escapeVisitorHtml(item.label)}</span><div class="tracking-bar-track"><div class="tracking-bar-fill" style="width:${Math.round(item.count / maxDaily * 100)}%"></div></div><strong>${item.count}</strong></div>
+    `).join("")}</section>
+    ${renderVisitorCounts("Most-visited pages", pageCounts)}
+    ${renderVisitorCounts("Top locations", locationCounts)}
+    ${renderVisitorCounts("Top organizations / ISPs", organizationCounts)}`;
+  document.getElementById("trackingRecentCount").textContent = `Showing ${visitors.length} of ${Number(totalCount) || 0} visits`;
+  const list = document.getElementById("trackingVisitorList");
+  if (!visitors.length) {
+    list.innerHTML = '<p class="tracking-empty">No regular-app visits have been recorded yet.</p>';
+    return;
+  }
+  list.innerHTML = visitors.map(visitor => {
+    const cityRegion = [visitor.city, visitor.region].filter(Boolean).join(", ") || "Unavailable";
+    return `<article class="tracking-visitor-row">
+      <div class="tracking-visitor-heading"><strong>${escapeVisitorHtml(formatVisitorTime(visitor.time))}</strong><span>${escapeVisitorHtml(visitor.device_id || "Device unavailable")}</span></div>
+      <div class="tracking-visitor-details">
+        <div><span>Page visited</span><strong>${escapeVisitorHtml(visitor.page || "Unavailable")}</strong></div>
+        <div><span>City and region</span><strong>${escapeVisitorHtml(cityRegion)}</strong></div>
+        <div><span>Organization / ISP</span><strong>${escapeVisitorHtml(visitor.org || "Unavailable")}</strong></div>
+        <div><span>Browser / user-agent</span><strong title="${escapeVisitorHtml(visitor.userAgent || "Unavailable")}">${escapeVisitorHtml(visitor.userAgent || "Unavailable")}</strong></div>
+        <div><span>Full URL</span><strong>${escapeVisitorHtml(visitor.full_url || "Unavailable")}</strong></div>
+      </div>
+    </article>`;
+  }).join("");
+}
+
+async function loadVisitorAnalytics() {
+  const requestId = ++visitorAnalyticsRequest;
+  const state = document.getElementById("trackingState");
+  const content = document.getElementById("trackingContent");
+  const refresh = document.getElementById("trackingRefresh");
+  if (!state || !content) return;
+  state.textContent = "Verifying administrator access…";
+  state.hidden = false;
+  content.hidden = true;
+  if (refresh) refresh.disabled = true;
+  await checkDeviceWhitelist();
+  if (requestId !== visitorAnalyticsRequest) return;
+  if (authorizationState !== "account_admin") {
+    state.textContent = authorizationState === "authorization_unavailable"
+      ? "Administrator access could not be verified. Try again when the authorization service is available."
+      : "Visitor analytics require a signed-in account with the trusted clinic_admin role. Device-only administrator access is not configured on this server.";
+    if (refresh) refresh.disabled = false;
+    return;
+  }
+  state.textContent = "Loading the latest regular-app visits…";
+  try {
+    if (!window.supabaseClient) throw new Error("Supabase client is unavailable.");
+    const { data, count, error } = await window.supabaseClient
+      .from("visitors")
+      .select("*", { count: "exact" })
+      .is("clinic_event_id", null)
+      .order("time", { ascending: false })
+      .limit(500);
+    if (error) throw error;
+    if (requestId !== visitorAnalyticsRequest) return;
+    const visitors = Array.isArray(data) ? data : [];
+    renderVisitorAnalytics(visitors, count ?? visitors.length);
+    state.hidden = true;
+    state.dataset.loaded = "true";
+    content.hidden = false;
+  } catch {
+    if (requestId === visitorAnalyticsRequest) {
+      state.textContent = "Visitor analytics could not be loaded. Check the visitor schema, RLS migration, and connection, then refresh.";
+    }
+  } finally {
+    if (refresh) refresh.disabled = false;
   }
 }
