@@ -1182,7 +1182,7 @@ async function callAPI(params, options = {}) {
       }
       const cacheable = SUPABASE_READ_ACTIONS.has(params.action);
       if (cacheable && memoryCache[key] && !options.force) return memoryCache[key];
-      const data = await window.pbtrkrDataService.call(params);
+      const data = await window.pbtrkrDataService.call(params, options);
       if (cacheable && data && !data.error) {
         memoryCache[key] = data;
       } else if (!cacheable) {
@@ -1199,6 +1199,7 @@ async function callAPI(params, options = {}) {
 
     // 🔥 3. FETCH FROM API
     const query = new URLSearchParams(params).toString();
+    if (typeof options.onDispatch === "function") options.onDispatch();
     const res = await fetch(`${API_URL}?${query}`, {
       cache: "no-store"
     });
@@ -1730,15 +1731,17 @@ async function saveSet(setNumber) {
       saveContext, scores, saveRequestId, ratingUpdates, "in_flight", attemptedExpectedScores
     );
     saveAttemptPersisted = true;
-    rpcOutcome = "started";
-    lastCompletedStage = "save.rpc.started";
     const res = await submitScoreSave(
       saveContext,
       scores,
       attemptedExpectedScores,
       ratingUpdates,
       saveRequestId,
-      "saveSet.click"
+      "saveSet.click",
+      () => {
+        rpcOutcome = "started";
+        lastCompletedStage = "save.rpc.started";
+      }
     );
     rpcOutcome = res?.reconciled === true ? "timeout_reconciled" : "confirmed";
     lastCompletedStage = "save.rpc.completed";
@@ -1935,6 +1938,74 @@ async function saveSet(setNumber) {
       finalUiOutcome: finalOutcome,
       saveButtonEnabled: !btn.disabled
     });
+  }
+}
+
+async function submitScoreSave(
+  context,
+  scores,
+  expectedScores,
+  ratingUpdates,
+  saveRequestId,
+  source,
+  onDispatch
+) {
+  const params = {
+    action: "saveSetFull",
+    set: context.setNumber,
+    date: context.date,
+    setId: context.setId,
+    scores: JSON.stringify(scores),
+    expectedScores: JSON.stringify(expectedScores),
+    ratingUpdates: JSON.stringify(ratingUpdates),
+    saveRequestId,
+    source
+  };
+  if (window.PBTRKR_USE_SUPABASE_DATA === true
+    && typeof window.pbtrkrDataService?.call !== "function") {
+    const error = new Error("The Supabase score-save service is unavailable; no save request was dispatched.");
+    error.code = "PBTRKR_SAVE_NOT_DISPATCHED";
+    console.warn("save.rpc.not_dispatched", {
+      saveRequestId,
+      event: "save.rpc.not_dispatched",
+      timestamp: new Date().toISOString(),
+      rpcName: "pbtrkr_save_set_full_once",
+      outcome: "not_dispatched",
+      classification: "not_reached_supabase"
+    });
+    throw error;
+  }
+
+  let requestDispatched = false;
+  try {
+    return await callAPI(params, {
+      saveRequestId,
+      source,
+      onDispatch: () => {
+        requestDispatched = true;
+        if (typeof onDispatch === "function") onDispatch();
+      }
+    });
+  } catch (error) {
+    if (!requestDispatched && error?.code !== "PBTRKR_SAVE_NOT_DISPATCHED") {
+      const notDispatchedError = new Error(
+        String(error?.message || "The score save was rejected before dispatch.")
+      );
+      notDispatchedError.code = "PBTRKR_SAVE_NOT_DISPATCHED";
+      notDispatchedError.cause = error;
+      if (!error?.pbtrkrNotDispatchedLogged) {
+        console.warn("save.rpc.not_dispatched", {
+          saveRequestId,
+          event: "save.rpc.not_dispatched",
+          timestamp: new Date().toISOString(),
+          rpcName: "pbtrkr_save_set_full_once",
+          outcome: "not_dispatched",
+          classification: "not_reached_supabase"
+        });
+      }
+      throw notDispatchedError;
+    }
+    throw error;
   }
 }
 

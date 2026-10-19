@@ -575,11 +575,14 @@
       argTypes: summarizeRpcArgs(args),
       requestKind: "supabase_rpc"
     };
-    console.info(rpcStarted.event, rpcStarted);
     try {
       let request;
       try {
-        request = client().rpc(name, args);
+        const supabaseClient = client();
+        request = supabaseClient.rpc(name, args);
+        if (typeof options.onDispatch === "function") options.onDispatch();
+        if (typeof options.onDispatched === "function") options.onDispatched();
+        console.info(rpcStarted.event, rpcStarted);
       } catch (error) {
         if (isScoreSaveRpc && !error?.code) {
           error.code = "PBTRKR_SAVE_NOT_DISPATCHED";
@@ -654,6 +657,17 @@
         })
       };
       console.warn(event, summary);
+      if (isScoreSaveRpc && error?.code === "PBTRKR_SAVE_NOT_DISPATCHED") {
+        console.warn("save.rpc.not_dispatched", {
+          saveRequestId,
+          event: "save.rpc.not_dispatched",
+          timestamp: new Date().toISOString(),
+          rpcName: name,
+          outcome: "not_dispatched",
+          classification: "not_reached_supabase"
+        });
+        error.pbtrkrNotDispatchedLogged = true;
+      }
       if (timedOut && isScoreSaveRpc) {
         console.info("PBTRKR score-save RPC timing", { durationMs, outcome: "timeout" });
       }
@@ -1141,11 +1155,12 @@
             p_device_id: deviceId(),
             p_save_request_id: saveRequestId
           };
-          saveRpcStarted = true;
           const saveResult = await rpc("pbtrkr_save_set_full_once", rpcArgs, {
             timeoutMs: options.timeoutMs ?? SCORE_SAVE_RPC_TIMEOUT_MS,
             saveRequestId,
-            source: params.source || "service.call"
+            source: params.source || "service.call",
+            onDispatch: options.onDispatch,
+            onDispatched: () => { saveRpcStarted = true; }
           });
           console.info("save.finished", {
             saveRequestId,
@@ -1174,7 +1189,9 @@
               rpcError: error,
               finalOutcome: timeoutHappened ? "timeout" : "error"
             }),
-            rpcOutcome: saveRpcStarted ? "error_or_uncertain" : "not_started",
+            rpcOutcome: saveRpcStarted
+              ? "error_or_uncertain"
+              : error?.code === "PBTRKR_SAVE_NOT_DISPATCHED" ? "not_dispatched" : "not_started",
             reconciliationOutcome: error?.code === "PBTRKR_PRIOR_SAVE_UNCONFIRMED"
               ? "prior_save_unconfirmed"
               : "not_started"
