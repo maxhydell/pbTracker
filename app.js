@@ -70,6 +70,9 @@ let lastMetaSeen = null;
 let cachedVisitorContext = null;
 let authorizationState = "authorization_unavailable";
 let currentAuthUser = null;
+let pendingAccountOtpEmail = "";
+let accountOtpResendUntil = 0;
+let accountOtpCooldownTimer = null;
 let visitorTrackingInFlight = false;
 let lastTrackedPageView = "";
 let lastVisitorTrackingAt = 0;
@@ -394,6 +397,113 @@ async function sendAccountSignInLink() {
   }
 }
 
+function setAccountOtpResendCooldown(seconds = 60) {
+  const button = document.getElementById("accountSignInResend");
+  const requestButton = document.getElementById("accountSignInSubmit");
+  if (accountOtpCooldownTimer) clearInterval(accountOtpCooldownTimer);
+  accountOtpResendUntil = Date.now() + (seconds * 1000);
+
+  const updateButton = () => {
+    const remaining = Math.max(0, Math.ceil((accountOtpResendUntil - Date.now()) / 1000));
+    if (button) {
+      button.disabled = remaining > 0;
+      button.textContent = remaining > 0 ? `Resend code in ${remaining}s` : "Resend code";
+    }
+    if (requestButton) {
+      requestButton.disabled = remaining > 0;
+      requestButton.textContent = remaining > 0 ? `Code sent (${remaining}s)` : "Send verification code";
+    }
+    if (remaining === 0 && accountOtpCooldownTimer) {
+      clearInterval(accountOtpCooldownTimer);
+      accountOtpCooldownTimer = null;
+    }
+  };
+
+  updateButton();
+  accountOtpCooldownTimer = setInterval(updateButton, 1000);
+}
+
+async function sendAccountEmailOtp(isResend = false) {
+  const input = document.getElementById("accountSignInEmail");
+  const button = document.getElementById(isResend ? "accountSignInResend" : "accountSignInSubmit");
+  const message = document.getElementById("accountSignInMessage");
+  const otpStep = document.getElementById("accountOtpStep");
+  const email = isResend
+    ? pendingAccountOtpEmail
+    : String(input?.value || "").trim().toLowerCase();
+  if (!input || !button || !message) return;
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    message.textContent = "Enter a valid email address.";
+    return;
+  }
+  if (Date.now() < accountOtpResendUntil) return;
+
+  button.disabled = true;
+  message.textContent = "Requesting a verification code…";
+  try {
+    if (!window.pbtrkrDataService) throw new Error("Sign-in service is unavailable.");
+    const { error } = await window.pbtrkrDataService.requestExistingUserEmailOtp(email);
+    pendingAccountOtpEmail = email;
+    if (otpStep) otpStep.hidden = false;
+    if (error) {
+      message.textContent = window.pbtrkrDataService.emailOtpRequestErrorMessage(error)
+        || "Could not request a verification code. Try again or use the sign-in link.";
+      return;
+    }
+    message.textContent = "If this address is eligible for PBTRKR, a verification code will arrive by email. Check your inbox and spam folder, or use the sign-in link.";
+    setAccountOtpResendCooldown();
+  } catch (error) {
+    pendingAccountOtpEmail = email;
+    if (otpStep) otpStep.hidden = false;
+    message.textContent = window.pbtrkrDataService?.emailOtpRequestErrorMessage(error)
+      || "Could not request a verification code. Try again or use the sign-in link.";
+  } finally {
+    const remaining = Math.max(0, Math.ceil((accountOtpResendUntil - Date.now()) / 1000));
+    button.disabled = remaining > 0;
+    if (isResend && remaining > 0) {
+      button.textContent = `Resend code in ${remaining}s`;
+    } else if (!isResend && remaining > 0) {
+      button.textContent = `Code sent (${remaining}s)`;
+    }
+  }
+}
+
+async function verifyAccountEmailOtp() {
+  const input = document.getElementById("accountSignInOtp");
+  const button = document.getElementById("accountSignInVerify");
+  const message = document.getElementById("accountSignInMessage");
+  const token = String(input?.value || "").trim();
+  if (!input || !button || !message) return;
+  if (!pendingAccountOtpEmail) {
+    message.textContent = "Request a verification code first.";
+    return;
+  }
+  if (!/^\d{4,10}$/.test(token)) {
+    message.textContent = "Enter the verification code from your email.";
+    return;
+  }
+
+  button.disabled = true;
+  message.textContent = "Verifying code…";
+  try {
+    if (!window.pbtrkrDataService || !window.supabaseClient?.auth) {
+      throw new Error("Sign-in service is unavailable.");
+    }
+    const { data, error } = await window.pbtrkrDataService.verifyExistingUserEmailOtp(pendingAccountOtpEmail, token);
+    if (error) throw error;
+    if (!data?.session) throw new Error("The verification did not create a session.");
+
+    message.textContent = "Code verified. Returning to PBTRKR…";
+    const returnUrl = `${window.location.pathname}${window.location.search}`;
+    window.location.replace(returnUrl);
+  } catch (error) {
+    message.textContent = window.pbtrkrDataService?.emailOtpVerificationErrorMessage(error)
+      || "That code is invalid, expired, or already used. Request a new code and try again.";
+  } finally {
+    button.disabled = false;
+  }
+}
+
 async function signOutAccount() {
   const button = document.getElementById("accountSignOut");
   if (button) button.disabled = true;
@@ -411,7 +521,10 @@ async function signOutAccount() {
 
 function initAccountControl() {
   document.getElementById("accountButton")?.addEventListener("click", toggleAccountPopover);
-  document.getElementById("accountSignInSubmit")?.addEventListener("click", sendAccountSignInLink);
+  document.getElementById("accountSignInSubmit")?.addEventListener("click", () => sendAccountEmailOtp());
+  document.getElementById("accountSignInVerify")?.addEventListener("click", verifyAccountEmailOtp);
+  document.getElementById("accountSignInResend")?.addEventListener("click", () => sendAccountEmailOtp(true));
+  document.getElementById("accountSignInMagicLink")?.addEventListener("click", sendAccountSignInLink);
   document.getElementById("accountSignOut")?.addEventListener("click", signOutAccount);
   document.addEventListener("click", event => {
     const menu = document.getElementById("accountMenu");

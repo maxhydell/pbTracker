@@ -67,8 +67,15 @@
         <div class="account-sign-in" id="accountSignIn" hidden>
           <label for="accountSignInEmail">Email address</label>
           <input id="accountSignInEmail" type="email" autocomplete="email" placeholder="you@example.com">
-          <button class="account-sign-in-submit" id="accountSignInSubmit" type="button">Send secure sign-in link</button>
+          <button class="account-sign-in-submit" id="accountSignInSubmit" type="button">Send verification code</button>
           <p id="accountSignInMessage" role="status" aria-live="polite"></p>
+          <div class="account-otp-step" id="accountOtpStep" hidden>
+            <label for="accountSignInOtp">Email verification code</label>
+            <input id="accountSignInOtp" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="10" placeholder="Enter your code">
+            <button class="account-sign-in-submit" id="accountSignInVerify" type="button">Verify code</button>
+            <button class="account-sign-in-submit account-sign-in-fallback" id="accountSignInResend" type="button">Resend code</button>
+          </div>
+          <button class="account-sign-in-submit account-sign-in-fallback" id="accountSignInMagicLink" type="button">Use secure sign-in link instead</button>
         </div>
         <button class="account-sign-out" id="accountSignOut" type="button" hidden>Sign Out</button>
       </section>

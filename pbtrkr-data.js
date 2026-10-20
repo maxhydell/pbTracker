@@ -251,6 +251,37 @@
     });
   }
 
+  async function requestExistingUserEmailOtp(email) {
+    return client().auth.signInWithOtp({
+      email,
+      options: { shouldCreateUser: false }
+    });
+  }
+
+  async function verifyExistingUserEmailOtp(email, token) {
+    return client().auth.verifyOtp({ email, token, type: "email" });
+  }
+
+  function emailOtpRequestErrorMessage(error) {
+    const status = Number(error?.status);
+    const code = String(error?.code || "").toLowerCase();
+    const message = String(error?.message || "").toLowerCase();
+    if (status === 429 || code.includes("rate") || message.includes("rate limit") || message.includes("too many")) {
+      return "Too many code requests. Wait a few minutes before trying again.";
+    }
+    return "If this address is eligible for PBTRKR, a verification code will arrive by email. Check your inbox and spam folder, or use the sign-in link.";
+  }
+
+  function emailOtpVerificationErrorMessage(error) {
+    const status = Number(error?.status);
+    const code = String(error?.code || "").toLowerCase();
+    const message = String(error?.message || "").toLowerCase();
+    if (status === 429 || code.includes("rate") || message.includes("rate limit") || message.includes("too many")) {
+      return "Too many verification attempts. Wait a few minutes before trying again.";
+    }
+    return "That code is invalid, expired, or already used. Request a new code and try again.";
+  }
+
   function magicLinkErrorMessage(error) {
     const status = Number(error?.status);
     const code = String(error?.code || "").toLowerCase();
@@ -1378,6 +1409,10 @@
     isEditorUser,
     requestExistingUserMagicLink,
     magicLinkErrorMessage,
+    requestExistingUserEmailOtp,
+    verifyExistingUserEmailOtp,
+    emailOtpRequestErrorMessage,
+    emailOtpVerificationErrorMessage,
     getCanonicalPlayerKey,
     reconcileSetSave,
     resolveScoreSaveRequest,
