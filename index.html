@@ -192,6 +192,16 @@
     </div>
 
     <div id="scheduleList"></div>
+    <section id="scheduleAutoGenerate" class="schedule-auto-generate" aria-labelledby="scheduleAutoGenerateTitle" hidden>
+      <h3 id="scheduleAutoGenerateTitle">Auto Generate</h3>
+      <div class="auto-generate-players" role="group" aria-label="Auto-generate weekly player assignments">
+        <button type="button" class="auto-player" data-auto-player="Max" onclick="startAutoGenerate('Max')">Max</button>
+        <button type="button" class="auto-player" data-auto-player="Matt" onclick="startAutoGenerate('Matt')">Matt</button>
+        <button type="button" class="auto-player" data-auto-player="Shayne" onclick="startAutoGenerate('Shayne')">Shayne</button>
+      </div>
+      <div id="autoGenerateWeekdays" class="auto-generate-weekdays" hidden></div>
+      <div id="autoGenerateStatus" class="auto-generate-status" role="status" aria-live="polite"></div>
+    </section>
     <div id="scheduleSaveWrap">
       <button id="scheduleSaveBtn" onclick="saveScheduleChanges()">
         Save
