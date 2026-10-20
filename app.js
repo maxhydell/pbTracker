@@ -3303,14 +3303,26 @@ let scheduleLoading = false;
 let autoGeneratePlayer = "";
 let autoGenerateInFlight = false;
 let autoGenerateSelectedDays = new Set();
+let autoGenerateWeekKey = "";
 
 const AUTO_GENERATE_PLAYERS = ["Max", "Matt", "Shayne"];
 const AUTO_GENERATE_SLOTS = { Max: 1, Matt: 2, Shayne: 3 };
 const AUTO_GENERATE_WEEKDAYS = ["Mon", "Tue", "Wed", "Thur", "Fri"];
 
 function autoGenerateWeekRows() {
-  const rows = Array.isArray(globalData.schedule) ? globalData.schedule : [];
-  return rows.slice(0, 5);
+  const schedule = Array.isArray(globalData.schedule) ? globalData.schedule : [];
+  const monday = effectiveScheduleWeekMonday();
+  const expectedDates = Array.from({ length: 5 }, (_, index) => {
+    const date = new Date(monday);
+    date.setDate(monday.getDate() + index);
+    return localScheduleDateKey(date);
+  });
+  const rowsByDate = new Map(schedule.map(row => [window.pbtrkrDataService.dateToIso(row.date), row]));
+  return expectedDates.map(date => rowsByDate.get(date) || {
+    date,
+    players: ["", "", "", ""],
+    status: [0, 0, 0, 0]
+  });
 }
 
 function isAutoGeneratePlayerComplete(name) {
@@ -3335,7 +3347,7 @@ function renderScheduleAutoGenerate() {
     button.disabled = autoGenerateInFlight || done;
     button.classList.toggle("completed", done);
     button.setAttribute("aria-label", `${name}${done ? ", complete for this week" : ""}`);
-    button.textContent = done ? `${name} ✓` : name;
+    button.textContent = name;
   });
 
   if (autoGeneratePlayer && !["Matt", "Shayne"].includes(autoGeneratePlayer)) autoGeneratePlayer = "";
@@ -3458,7 +3470,7 @@ async function saveAutoGenerateAssignments(name, dayIndexes) {
         date: row.date,
         changes: JSON.stringify([{ field: `p${slot}`, value: normalized }])
       });
-      if (response?.error || response?.success === false) throw new Error(response.error || "Schedule save was not confirmed");
+      if (response?.success !== true) throw new Error(response?.error || "Schedule save was not confirmed");
       row.players[slot - 1] = normalized;
       saved++;
     } catch (error) {
@@ -3519,8 +3531,18 @@ const weekDates = Array.from({ length: 5 }, (_, i) => {
 });
 data = window.pbtrkrDataService.normalizeScheduleRows(data, weekDates);
 globalData.schedule = data;
-    autoGeneratePlayer = "";
-    autoGenerateSelectedDays = new Set();
+    const loadedWeekKey = weekDates[0];
+    if (autoGenerateWeekKey !== loadedWeekKey) {
+      autoGenerateWeekKey = loadedWeekKey;
+      autoGeneratePlayer = "";
+      autoGenerateSelectedDays = new Set();
+      const autoStatus = document.getElementById("autoGenerateStatus");
+      if (autoStatus) {
+        autoStatus.textContent = "";
+        autoStatus.dataset.kind = "";
+        autoStatus.className = "auto-generate-status";
+      }
+    }
 
     console.log("📊 SCHEDULE LENGTH:", data.length);
 
