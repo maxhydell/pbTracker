@@ -48,6 +48,7 @@ const scoreSaveStates = window.PBTRKRScoreState.create();
 const persistedScoreSnapshots = window.PBTRKRScoreState.createPersistedScoreSnapshots();
 let scoreAnalyticsRefreshPromise = null;
 let scoreAnalyticsRefreshPending = false;
+let resultsRestoreRequest = 0;
 let globalData = {
   sets: null,
   trend: null,
@@ -1593,11 +1594,47 @@ function updateDoneUiVisibility() {
 
 function restoreResultsIfAny() {
   if (!isDayComplete()) return;
-  const html = localStorage.getItem(`pbTracker_results_${todayKey()}`);
+  const storageKey = `pbTracker_results_${todayKey()}`;
+  const html = localStorage.getItem(storageKey);
   const el = document.getElementById("dayResults");
   if (html && el) {
-    el.innerHTML = html;
+    if (html.includes("results-stat-table")) {
+      el.innerHTML = html;
+      el.style.display = "block";
+      return;
+    }
+
+    const legacyResults = document.createElement("div");
+    legacyResults.innerHTML = html;
+    const standings = Array.from(legacyResults.querySelectorAll(".result-player-name"))
+      .map(node => String(node.textContent || "").trim())
+      .filter(Boolean)
+      .map(name => ({ name, displayName: name }));
+    if (!standings.length || !window.PBTRKRResults) {
+      el.innerHTML = html;
+      el.style.display = "block";
+      return;
+    }
+
+    const sets = lastTodaySetsData || globalData.sets || [];
+    const initialStats = window.PBTRKRResults.calculateDayStatistics(sets, standings, null);
+    el.innerHTML = buildResultsHtml(standings, initialStats, todayKey());
     el.style.display = "block";
+    localStorage.setItem(storageKey, el.innerHTML);
+
+    if (window.PBTRKR_USE_SUPABASE_DATA === true && window.pbtrkrDataService?.getDayRatingEvents) {
+      const request = ++resultsRestoreRequest;
+      window.pbtrkrDataService.getDayRatingEvents(todayKey()).then(ratingEvents => {
+        if (request !== resultsRestoreRequest || !isDayComplete()) return;
+        const dayStats = window.PBTRKRResults.calculateDayStatistics(sets, standings, ratingEvents);
+        const updatedHtml = buildResultsHtml(standings, dayStats, todayKey());
+        localStorage.setItem(storageKey, updatedHtml);
+        const currentResults = document.getElementById("dayResults");
+        if (currentResults) currentResults.innerHTML = updatedHtml;
+      }).catch(error => {
+        console.warn("Historical DUPR snapshots are unavailable while restoring results:", error);
+      });
+    }
   }
 }
 
@@ -4191,8 +4228,11 @@ function computeTodayStandings(setsData) {
   return Object.values(stats).filter(s => s.wins > 0 || s.points > 0);
 }
 
-function buildResultsHtml(standings, morningPcts, afterTrend) {
-  const dayName = new Date().toLocaleDateString("en-US", { weekday: "long" }).toUpperCase();
+function buildResultsHtml(standings, dayStats = {}, selectedDate = null, showRevertButton = false) {
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(String(selectedDate || ""))
+    ? new Date(`${selectedDate}T12:00:00`)
+    : new Date();
+  const dayName = date.toLocaleDateString("en-US", { weekday: "long" }).toUpperCase();
 
   function medalFor(i) {
     if (i === 0) return `<span class="result-medal" aria-hidden="true">🏆</span>`;
@@ -4201,27 +4241,42 @@ function buildResultsHtml(standings, morningPcts, afterTrend) {
     return `<span class="result-medal result-medal-empty"></span>`;
   }
 
-  const rows = standings.map((s, i) => {
-    const delta = Number(s.change) || 0;
-    const deltaStr = `${delta >= 0 ? "+" : ""}${delta.toFixed(2)}%`;
-    const cls = delta >= 0 ? "delta-pos" : "delta-neg";
+  const rows = standings.map((player, i) => {
+    const name = player.displayName || player.name || player.player_name || "";
+    const key = String(name).trim().replace(/\s+/g, " ").toLowerCase();
+    const playerStats = dayStats?.[key] || {};
+    const rankDirection = playerStats.rankDirection || "unavailable";
+    const rankClass = rankDirection === "better" ? "better" : rankDirection === "worse" ? "worse" : "same";
+    const rankIndicator = rankDirection === "better"
+      ? "<span class=\"results-rank-indicator\" aria-hidden=\"true\">▲</span>"
+      : rankDirection === "worse"
+        ? "<span class=\"results-rank-indicator\" aria-hidden=\"true\">▼</span>"
+        : "";
+    const deltaClass = playerStats.deltaDirection === "positive"
+      ? "positive"
+      : playerStats.deltaDirection === "negative"
+        ? "negative"
+        : "neutral";
+    const rankDescription = playerStats.rankDescription || "Expected rank unavailable";
+    const deltaDisplay = playerStats.deltaDuprDisplay || "—";
+    const deltaDescription = deltaDisplay === "—" ? "DUPR change unavailable" : `DUPR change ${deltaDisplay}`;
     return `
-      <div class="result-rank-row">
-        <div class="result-rank-left">
-          ${medalFor(i)}
-          <span class="result-player-name">${escapeHtml(capitalize(s.displayName))}</span>
-        </div>
-        <div class="result-rank-right">
-          <div class="result-progress-wrap">
-            <div class="result-progress-track">
-              <span class="result-progress-label ${cls}">${deltaStr}</span>
-            </div>
-            <div class="result-check-box" aria-hidden="true">✓</div>
-          </div>
-        </div>
-      </div>
+      <tr class="results-stat-row">
+        <th class="results-player-cell" scope="row">
+          <span class="results-player-inner">
+          ${medalFor(i)}<span class="result-player-name">${escapeHtml(capitalize(name))}</span>
+          </span>
+        </th>
+        <td class="results-stat-value" aria-label="Points earned divided by points allowed: ${playerStats.eaDisplay || "—"}">${playerStats.eaDisplay || "—"}</td>
+        <td class="results-stat-value results-expected-rank ${rankClass}" aria-label="${escapeHtml(rankDescription)}">${playerStats.expectedRankDisplay || "—"}${rankIndicator}</td>
+        <td class="results-stat-value results-dupr-change ${deltaClass}" aria-label="${escapeHtml(deltaDescription)}">${deltaDisplay}</td>
+      </tr>
     `;
   }).join("");
+
+  const revertButton = showRevertButton
+    ? `<button onclick="revertDay()" class="revert-btn">Revert</button>`
+    : "";
 
   return `
     <div class="results-screen">
@@ -4233,8 +4288,15 @@ function buildResultsHtml(standings, morningPcts, afterTrend) {
           <span class="results-card-title">RANKINGS</span>
         </div>
         <div class="results-card-body">
-          ${rows || "<p class=\"results-empty\">No games recorded today.</p>"}
+          ${rows
+            ? `<table class="results-stat-table">
+                <colgroup><col class="results-player-column"><col class="results-ea-column"><col class="results-expected-column"><col class="results-dupr-column"></colgroup>
+                <thead><tr><th scope="col">Player</th><th scope="col" aria-label="Points earned divided by points allowed">E/A</th><th scope="col">Expected<br>Rank</th><th scope="col">Δ DUPR</th></tr></thead>
+                <tbody>${rows}</tbody>
+              </table>`
+            : "<p class=\"results-empty\">No games recorded today.</p>"}
         </div>
+        ${revertButton}
       </div>
     </div>
   `;
@@ -4360,11 +4422,17 @@ async function finishDay() {
     return b.points - a.points;
   });
 
-  // ===== RENDER =====
+  // ===== PREPARE DAY STATISTICS =====
   updateDoneProgress(75);
-  renderResults(final);
-  setDayComplete(true);
-  updateDoneUiVisibility();
+  const resultsDate = window.pbtrkrDataService?.todayIso?.()
+    || new Date().toISOString().split("T")[0];
+  const ratingEventsPromise = window.PBTRKR_USE_SUPABASE_DATA === true
+    && window.pbtrkrDataService?.getDayRatingEvents
+    ? Promise.resolve().then(() => window.pbtrkrDataService.getDayRatingEvents(resultsDate)).catch(error => {
+      console.warn("Day DUPR snapshots are unavailable for the results popup:", error);
+      return null;
+    })
+    : Promise.resolve(null);
 
   // ===== SAVE HISTORY TO SUPABASE =====
   updateDoneProgress(80);
@@ -4454,12 +4522,13 @@ async function finishDay() {
     localStorage.setItem("results_" + shareId, JSON.stringify(final));
   }
 
+  const ratingEvents = await ratingEventsPromise;
+  const dayStatistics = window.PBTRKRResults?.calculateDayStatistics(sets, final, ratingEvents) || {};
+  setDayComplete(true);
+  updateDoneUiVisibility();
+
   updateDoneProgress(95);
-  localStorage.setItem(`pbTracker_results_${todayKey()}`, buildResultsHtml(
-    final.map(x => ({ ...x, key: x.name.toLowerCase(), displayName: x.name, prevWinPct: previousHistoryMap[x.name]?.winPct || 0 })),
-    getMorningWinPctSnapshot(globalData.trend || before || []),
-    before || []
-  ));
+  localStorage.setItem(`pbTracker_results_${todayKey()}`, buildResultsHtml(final, dayStatistics, resultsDate));
 
   const shareUrl = `${window.location.origin}${getSiteBasePath()}share/?r=${shareId}`;
 
@@ -4521,51 +4590,9 @@ async function loadSharedResults() {
 }
 
 function renderResults(data) {
-
-  const medals = ["🏆","🥈","🥉",""];
-  const bestPlayer = data[0]?.name || "";
-
-  const html = `
-    <div class="results-card">
-
-      <div class="results-title">RESULTS</div>
-      <div class="results-day">
-        ${new Date().toLocaleDateString("en-US",{weekday:"long"}).toUpperCase()}
-      </div>
-
-      <div class="results-inner">
-
-        ${data.map((p,i)=>`
-          <div class="result-row">
-
-            <div class="left">
-              <span class="medal">${medals[i] || ""}</span>
-              ${capitalize(p.name)}
-            </div>
-
-            <div class="right">
-
-              <div class="progress">
-                <div class="fill ${p.change >= 0 ? "green" : "red"}"
-                     style="width:${Math.min(Math.abs(p.change)*4,100)}%">
-                  ${p.change > 0 ? "+" : ""}${p.change}%
-                </div>
-              </div>
-
-            </div>
-
-          </div>
-        `).join("")}
-
-      </div>
-
-      <button onclick="revertDay()" class="revert-btn">Revert</button>
-    </div>
-  `;
-
   const box = document.getElementById("dayResults");
   if (box) {
-    box.innerHTML = html;
+    box.innerHTML = buildResultsHtml(data, {}, data?.[0]?.date || null, true);
     box.style.display = "block";
   }
 }

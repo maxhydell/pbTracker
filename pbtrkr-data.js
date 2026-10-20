@@ -537,6 +537,18 @@
     }
   }
 
+  async function getDayRatingEvents(date) {
+    const isoDate = dateToIso(date);
+    if (!isoDate) throw new Error("A valid day is required to load its DUPR snapshots.");
+    const { data, error } = await client()
+      .from("pbtrkr_rating_events")
+      .select("player_name,set_number,dupr_before,dupr_after,is_reverted")
+      .eq("event_date", isoDate)
+      .eq("is_reverted", false);
+    if (error) throw error;
+    return Array.isArray(data) ? data : [];
+  }
+
   async function getAllSets() {
     const rows = await selectAll("pbtrkr_sets", "id,match_date,date_raw,set_number,team_a,team_b,game_scores,scores_resolved", query => query.order("match_date", { ascending: true }).order("set_number", { ascending: true }).order("id", { ascending: true }));
     return rows.map(toLegacySet);
@@ -1418,6 +1430,7 @@
     resolveScoreSaveRequest,
     getSchedule,
     getSets,
+    getDayRatingEvents,
     getAllSets,
     getHistory,
     getTrend,

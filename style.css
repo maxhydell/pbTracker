@@ -997,6 +997,7 @@ button:active {
 
 .account-popover[hidden],
 .account-sign-in[hidden],
+.account-otp-step[hidden],
 .account-sign-out[hidden],
 .tracking-content[hidden],
 #trackVisitorsMenuLink[hidden] {
@@ -2080,6 +2081,145 @@ select.dash-player-select option,
   color: #2e4472;
   letter-spacing: 0.03em;
   text-transform: none;
+}
+
+.results-stat-table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  color: #173354;
+  font-variant-numeric: tabular-nums;
+}
+
+.results-player-column { width: 38%; }
+.results-ea-column { width: 15%; }
+.results-expected-column { width: 25%; }
+.results-dupr-column { width: 22%; }
+
+.results-stat-table thead th {
+  padding: 7px 3px 9px;
+  color: #486584;
+  font-size: 0.66rem;
+  font-weight: 800;
+  letter-spacing: 0.035em;
+  line-height: 1.15;
+  text-align: center;
+  text-transform: uppercase;
+  vertical-align: bottom;
+}
+
+.results-stat-table thead th:first-child {
+  padding-left: 4px;
+  text-align: left;
+}
+
+.results-stat-row {
+  border-top: 1px solid rgba(46, 68, 114, 0.16);
+}
+
+.results-stat-row > th,
+.results-stat-row > td {
+  padding: 9px 3px;
+  vertical-align: middle;
+}
+
+.results-player-cell {
+  min-width: 0;
+  font-weight: 700;
+  text-align: left;
+}
+
+.results-player-inner {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.results-player-inner .result-medal,
+.results-player-inner .result-medal-empty {
+  width: 1.2rem;
+  min-width: 1.2rem;
+  font-size: 1.1rem;
+}
+
+.results-player-inner .result-player-name {
+  min-width: 0;
+  color: #203f65;
+  font-family: "Open Sans", sans-serif;
+  font-size: 0.95rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.results-stat-value {
+  color: #203f65;
+  font-size: 0.88rem;
+  font-weight: 750;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.results-expected-rank.better,
+.results-dupr-change.positive {
+  color: #087443;
+}
+
+.results-expected-rank.worse,
+.results-dupr-change.negative {
+  color: #b42332;
+}
+
+.results-expected-rank.same,
+.results-dupr-change.neutral {
+  color: #52677f;
+}
+
+.results-rank-indicator {
+  display: inline-block;
+  margin-left: 3px;
+  font-size: 0.8rem;
+  font-weight: 900;
+}
+
+@media (max-width: 380px) {
+  .results-card-body {
+    padding-right: 6px;
+    padding-left: 6px;
+  }
+
+  .results-stat-table thead th {
+    padding-right: 2px;
+    padding-left: 2px;
+    font-size: 0.6rem;
+  }
+
+  .results-stat-row > th,
+  .results-stat-row > td {
+    padding-right: 2px;
+    padding-left: 2px;
+  }
+
+  .results-player-inner {
+    gap: 3px;
+  }
+
+  .results-player-inner .result-medal,
+  .results-player-inner .result-medal-empty {
+    width: 1.05rem;
+    min-width: 1.05rem;
+    font-size: 0.98rem;
+  }
+
+  .results-player-inner .result-player-name {
+    font-size: 0.82rem;
+  }
+
+  .results-stat-value {
+    font-size: 0.76rem;
+  }
 }
 
 .result-rank-right {
