@@ -1,4 +1,5 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { parseHTML } from "npm:linkedom@0.18.9";
 
 const ALLOWED_ORIGINS = new Set([
   "https://pbtrkr.app",
@@ -44,15 +45,94 @@ function stripMarkup(value: string): string {
 }
 
 
+function escapeHtml(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+function isExcluded(node: Element): boolean {
+  return Boolean(node.closest("nav, footer, aside, script, style, header, [class*='related'], [class*='sidebar'], [class*='share'], [class*='social'], [class*='recommend']"));
+}
+
+function extractJsonLdArticleBody(document: Document): string[] {
+  const found: string[] = [];
+  const visit = (value: unknown) => {
+    if (Array.isArray(value)) { value.forEach(visit); return; }
+    if (!value || typeof value !== "object") return;
+    const record = value as Record<string, unknown>;
+    if (typeof record.articleBody === "string" && record.articleBody.trim().length > 300) {
+      found.push(record.articleBody.trim());
+    }
+    if (record["@graph"]) visit(record["@graph"]);
+    if (record.mainEntity) visit(record.mainEntity);
+    if (record.mainEntityOfPage) visit(record.mainEntityOfPage);
+  };
+  for (const script of document.querySelectorAll('script[type="application/ld+json"]')) {
+    try { visit(JSON.parse(script.textContent || "")); } catch { /* ignore malformed JSON-LD */ }
+  }
+  return found.sort((a, b) => b.length - a.length);
+}
+
 function extractArticleBody(html: string, description: string): { bodyText: string; bodyHtml: string } {
- const regions: string[] = [];
- regions.push(...(html.match(/<article\b[^>]*>[\s\S]*?<\/article>/gi) ?? []));
- regions.push(...(html.match(/<main\b[^>]*>[\s\S]*?<\/main>/gi) ?? []));
- regions.push(html);
- let bestText=description;
- let bestHtml="<p>"+description+"</p>";
- for(const region of regions){const blocks:string[]=[];const re=/<p\b[^>]*>([\s\S]*?)<\/p>/gi;let m:RegExpExecArray|null;while((m=re.exec(region))!==null){const t=stripMarkup(m[1]);if(t.length>=35&&!blocks.includes(t))blocks.push(t);}const candidate=blocks.join("\n\n");if(candidate.length>bestText.length+80){bestText=candidate;bestHtml=blocks.map(t=>"<p>"+t.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")+"</p>").join("\n");}}
- return {bodyText:bestText,bodyHtml:bestHtml};
+  const { document } = parseHTML(html);
+  const selectors = [
+    '[itemprop="articleBody"]',
+    'article',
+    'main',
+    '[class*="article-body"]',
+    '[class*="article-content"]',
+    '[class*="story-body"]',
+    '[class*="story-content"]',
+    '[data-testid*="article"]'
+  ];
+  let bestBlocks: Array<{ tag: string; text: string }> = [];
+  let bestLength = 0;
+
+  for (const selector of selectors) {
+    for (const candidate of document.querySelectorAll(selector)) {
+      const blocks: Array<{ tag: string; text: string }> = [];
+      for (const node of candidate.querySelectorAll("h2,h3,h4,p,blockquote,li")) {
+        if (isExcluded(node)) continue;
+        const text = (node.textContent || "").replace(/\\s+/g, " ").trim();
+        if (text.length < 25) continue;
+        if (blocks.some(block => block.text === text)) continue;
+        blocks.push({ tag: node.tagName.toLowerCase(), text });
+      }
+      const length = blocks.reduce((sum, block) => sum + block.text.length, 0);
+      if (length > bestLength) { bestLength = length; bestBlocks = blocks; }
+    }
+  }
+
+  if (bestLength < 300) {
+    const jsonLd = extractJsonLdArticleBody(document)[0];
+    if (jsonLd) {
+      const paragraphs = jsonLd.split(/\\n\\s*\\n/).map(part => part.trim()).filter(Boolean);
+      if (paragraphs.join("").length > bestLength) {
+        bestBlocks = paragraphs.map(text => ({ tag: "p", text }));
+        bestLength = paragraphs.join("").length;
+      }
+    }
+  }
+
+  if (bestLength < 300) {
+    const articleRegion = document.querySelector("article") || document.querySelector("main");
+    const text = (articleRegion?.textContent || "").replace(/\\s+/g, " ").trim();
+    if (text.length > bestLength + 80 && text.length > 300) {
+      bestBlocks = [{ tag: "p", text }];
+      bestLength = text.length;
+    }
+  }
+
+  if (bestLength < 300) {
+    return { bodyText: description, bodyHtml: "<p>" + escapeHtml(description) + "</p>" };
+  }
+
+  const bodyText = bestBlocks.map(block => block.text).join("\\n\\n");
+  const bodyHtml = bestBlocks.map(block => {
+    const tag = block.tag === "h2" || block.tag === "h3" || block.tag === "h4" ? block.tag : "p";
+    const content = tag === "p" && block.tag === "li" ? "• " + block.text : block.text;
+    return "<" + tag + ">" + escapeHtml(content) + "</" + tag + ">";
+  }).join("\\n");
+  return { bodyText, bodyHtml };
 }
 function attributes(tag: string): Record<string,string> {
   const result: Record<string,string> = {};
