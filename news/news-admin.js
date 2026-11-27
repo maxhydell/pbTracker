@@ -19,7 +19,86 @@ async function saveArticle(status){const f=document.getElementById("article-form
 async function setStatus(id,status){const article=articles.find(x=>x.id===id);const{error}=await supabaseClient.from("news_articles").update({status,published_at:article?.published_at||new Date().toISOString(),updated_at:new Date().toISOString()}).eq("id",id);if(error){showToast(error.message);return;}showToast("Article published.");await loadArticles();}
 async function deleteArticle(a){if(!confirm(`Delete “${a.title}”? This cannot be undone.`))return;const{error}=await supabaseClient.from("news_articles").delete().eq("id",a.id);if(error){showToast(error.message);return;}showToast("Article deleted.");await loadArticles();}
 // The Supabase Edge Function scrapes Pickleball.com server-side to avoid browser CORS restrictions.
-async function pullFromPb(){const b=document.getElementById("pull-pb");const msg=document.getElementById("import-message");b.disabled=true;b.textContent="Pulling…";msg.classList.remove("is-hidden","error");msg.textContent="Fetching full article text from Pickleball.com…";let imported=0,expanded=0,skipped=0;try{const{data:feed,error:feedError}=await supabaseClient.functions.invoke("pbtrkr-pull-pb-news",{body:{limit:6}});if(feedError)throw feedError;const items=Array.isArray(feed?.articles)?feed.articles:[];if(!items.length)throw new Error("Pickleball.com did not return any articles. Try again later.");for(const item of items){const link=item.source_url||"";if(!/^https:\/\/pickleball\.com\/(?:news|people)\//i.test(link)){skipped++;continue;}const exists=articles.find(a=>a.source_url===link||a.source_article_id===item.source_article_id);if(exists){const newBody=String(item.body_text||"").trim();const oldBody=String(exists.body_text||"").trim();if(exists.source_name==="Pickleball.com"&&newBody.length>Math.max(oldBody.length+80,350)){const{error}=await supabaseClient.from("news_articles").update({body_text:newBody,body_html:item.body_html||exists.body_html,description:item.description||exists.description,image_url:item.image_url||exists.image_url,image_alt:item.image_alt||exists.image_alt,source_author:item.source_author||exists.source_author,updated_at:new Date().toISOString()}).eq("id",exists.id);if(error)throw error;expanded++;}else skipped++;continue;}const payload={title:item.title,slug:`${slugify(item.title)}-${String(item.source_article_id||Date.now()).replace(/[^a-z0-9]/gi,"").slice(-8)}`,description:item.description||item.title,image_url:item.image_url||null,image_alt:item.image_alt||item.title,body_text:item.body_text||"",body_html:item.body_html||"",author_name:null,source_author:item.source_author||null,category:item.category||"Pickleball News",status:"draft",published_at:item.published_at||new Date().toISOString(),source_name:"Pickleball.com",source_url:link,source_article_id:item.source_article_id||link,original_html:item.original_html||null,updated_at:new Date().toISOString()};const{error}=await supabaseClient.from("news_articles").insert(payload);if(error)throw error;imported++;}await loadArticles();msg.textContent=`Imported ${imported} new article${imported===1?"":"s"} and expanded ${expanded} existing article${expanded===1?"":"s"} with full text. ${skipped} duplicate or unchanged item${skipped===1?"":"s"} skipped. Review drafts and publish when ready.`;showToast(`${imported} imported · ${expanded} expanded.`);}catch(error){console.error("PB.com import failed:",error);msg.classList.add("error");msg.textContent=`Pull failed: ${error.message||"Unknown error"}. Review the article list before retrying.`;}finally{b.disabled=false;b.textContent="↓ Pull from PB.com";}}
+async function pullFromPb(){
+  const button=document.getElementById("pull-pb");
+  const message=document.getElementById("import-message");
+  button.disabled=true;
+  button.textContent="Pulling…";
+  message.classList.remove("is-hidden","error");
+  message.textContent="Fetching full article text from Pickleball.com…";
+  let imported=0,expanded=0,skipped=0;
+  const warnings=[];
+  const minimumFullBodyLength=350;
+  try{
+    const{data:feed,error:feedError}=await supabaseClient.functions.invoke("pbtrkr-pull-pb-news",{body:{limit:6}});
+    if(feedError)throw feedError;
+    const items=Array.isArray(feed?.articles)?feed.articles:[];
+    if(!items.length)throw new Error("Pickleball.com did not return any articles. Try again later.");
+    for(const item of items){
+      const link=item.source_url||"";
+      if(!/^https:\/\/pickleball\.com\/(?:news|people)\//i.test(link)){skipped++;continue;}
+      const newBody=String(item.body_text||"").trim();
+      if(item.fetch_warning||newBody.length<minimumFullBodyLength){
+        skipped++;
+        warnings.push((item.title||link)+": "+(item.fetch_warning||"The importer did not find the full article body."));
+        continue;
+      }
+      const exists=articles.find(a=>a.source_url===link||a.source_article_id===item.source_article_id);
+      if(exists){
+        const oldBody=String(exists.body_text||"").trim();
+        if(exists.source_name==="Pickleball.com"&&newBody.length>Math.max(oldBody.length+80,minimumFullBodyLength)){
+          const{error}=await supabaseClient.from("news_articles").update({
+            body_text:newBody,
+            body_html:item.body_html||exists.body_html,
+            description:item.description||exists.description,
+            image_url:item.image_url||exists.image_url,
+            image_alt:item.image_alt||exists.image_alt,
+            source_author:item.source_author||exists.source_author,
+            original_html:item.original_html||exists.original_html,
+            updated_at:new Date().toISOString()
+          }).eq("id",exists.id);
+          if(error)throw error;
+          expanded++;
+        }else skipped++;
+        continue;
+      }
+      const payload={
+        title:item.title,
+        slug:`${slugify(item.title)}-${String(item.source_article_id||Date.now()).replace(/[^a-z0-9]/gi,"").slice(-8)}`,
+        description:item.description||item.title,
+        image_url:item.image_url||null,
+        image_alt:item.image_alt||item.title,
+        body_text:newBody,
+        body_html:item.body_html||"",
+        author_name:null,
+        source_author:item.source_author||null,
+        category:item.category||"Pickleball News",
+        status:"draft",
+        published_at:item.published_at||new Date().toISOString(),
+        source_name:"Pickleball.com",
+        source_url:link,
+        source_article_id:item.source_article_id||link,
+        original_html:item.original_html||null,
+        updated_at:new Date().toISOString()
+      };
+      const{error}=await supabaseClient.from("news_articles").insert(payload);
+      if(error)throw error;
+      imported++;
+    }
+    await loadArticles();
+    const summary=`Imported ${imported} new article${imported===1?"":"s"} and expanded ${expanded} existing article${expanded===1?"":"s"} with full text. ${skipped} duplicate, unchanged, or incomplete item${skipped===1?"":"s"} skipped.`;
+    message.textContent=warnings.length?summary+" Check the console for articles that could not be expanded.":summary;
+    if(warnings.length)console.warn("PBTRKR News importer warnings:",warnings);
+    showToast(`${imported} imported · ${expanded} expanded.`);
+  }catch(error){
+    console.error("PB.com import failed:",error);
+    message.classList.add("error");
+    message.textContent=`Pull failed: ${error.message||"Unknown error"}. No existing articles were deleted.`;
+  }finally{
+    button.disabled=false;
+    button.textContent="↓ Pull from PB.com";
+  }
+}
   function getNewsDeviceId(){const key="pbTracker_deviceId_v1";let id=localStorage.getItem(key);if(!id){id=crypto.randomUUID();localStorage.setItem(key,id);}return id;}
   async function getNewsVisitorContext(){try{const r=await fetch("https://ipapi.co/json/");if(!r.ok)throw new Error("IP location lookup failed.");const d=await r.json();return{ip:d.ip||null,city:d.city||null,region:d.region||null,org:d.org||null};}catch(error){console.warn("Could not load approximate visitor location:",error);return{};}}
   async function trackNewsVisit(articleId){if(!articleId||!supabaseClient)return;const visitor={device_id:getNewsDeviceId(),ip:null,city:null,region:null,org:null,page:location.pathname||"unknown",full_url:location.href,query:location.search||null,mode:new URLSearchParams(location.search).get("p")||null,time:new Date().toISOString(),userAgent:navigator.userAgent,news_article_id:articleId};Object.assign(visitor,await getNewsVisitorContext());try{const{error}=await supabaseClient.from("visitors").insert([visitor]);if(error)throw error;}catch(error){console.warn("Could not record news article visit:",error?.message||error);}}
