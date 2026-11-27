@@ -66,3 +66,11 @@ drop policy if exists "PBTRKR news admins update media" on storage.objects;
 create policy "PBTRKR news admins update media" on storage.objects for update to authenticated using (bucket_id='news-media' and (select auth.jwt()->'app_metadata'->>'role') in ('clinic_admin','pbtrkr_admin')) with check (bucket_id='news-media' and (select auth.jwt()->'app_metadata'->>'role') in ('clinic_admin','pbtrkr_admin'));
 drop policy if exists "PBTRKR news admins delete media" on storage.objects;
 create policy "PBTRKR news admins delete media" on storage.objects for delete to authenticated using (bucket_id='news-media' and (select auth.jwt()->'app_metadata'->>'role') in ('clinic_admin','pbtrkr_admin'));
+
+-- PostgREST connects as authenticator while building its schema cache.
+-- The project exposes both public and graphql_public; grant the connection role
+-- schema visibility and SELECT metadata access without granting client roles extra rights.
+grant usage on schema public, graphql_public to authenticator;
+grant select on table public.news_articles to authenticator;
+notify pgrst, 'reload config';
+notify pgrst, 'reload schema';
