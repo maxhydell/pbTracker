@@ -43,6 +43,17 @@ function stripMarkup(value: string): string {
     .replace(/\s+/g, " ").trim());
 }
 
+
+function extractArticleBody(html: string, description: string): { bodyText: string; bodyHtml: string } {
+ const regions: string[] = [];
+ regions.push(...(html.match(/<article\\b[^>]*>[\\s\\S]*?<\\/article>/gi) ?? []));
+ regions.push(...(html.match(/<main\\b[^>]*>[\\s\\S]*?<\\/main>/gi) ?? []));
+ regions.push(html);
+ let bestText=description;
+ let bestHtml="<p>"+description+"</p>";
+ for(const region of regions){const blocks:string[]=[];const re=/<p\\b[^>]*>([\\s\\S]*?)<\\/p>/gi;let m:RegExpExecArray|null;while((m=re.exec(region))!==null){const t=stripMarkup(m[1]);if(t.length>=35&&!blocks.includes(t))blocks.push(t);}const candidate=blocks.join("\\n\\n");if(candidate.length>bestText.length+80){bestText=candidate;bestHtml=blocks.map(t=>"<p>"+t.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")+"</p>").join("\\n");}}
+ return {bodyText:bestText,bodyHtml:bestHtml};
+}
 function attributes(tag: string): Record<string,string> {
   const result: Record<string,string> = {};
   const re = /([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/g;
@@ -66,7 +77,7 @@ function canonicalArticleUrl(href: string, pageUrl: string): string | null {
   try {
     const url = new URL(href, pageUrl);
     if (url.hostname !== "pickleball.com" || url.protocol !== "https:") return null;
-    if (!/^\/news\/[a-z0-9][a-z0-9-]+\/?$/i.test(url.pathname)) return null;
+    if (!/^\/(?:news|people)\/[a-z0-9][a-z0-9-]+\/?$/i.test(url.pathname)) return null;
     return "https://pickleball.com" + url.pathname.replace(/\/$/, "");
   } catch {
     return null;
@@ -130,6 +141,7 @@ async function fetchArticle(candidate: {url:string,title:string}) {
   } catch { /* no valid featured image */ }
   const sourceAuthor = stripMarkup(metaValue(html, "author") || metaValue(html, "article:author")) || null;
   const sourceId = new URL(candidate.url).pathname.split("/").filter(Boolean).at(-1) || candidate.url;
+  const extracted = extractArticleBody(html, description);
   return {
     title,
     description: description.slice(0, 600),
@@ -141,8 +153,8 @@ async function fetchArticle(candidate: {url:string,title:string}) {
     source_name: "Pickleball.com",
     source_url: candidate.url,
     source_article_id: sourceId,
-    body_text: description.slice(0, 600),
-    body_html: "<p>" + description.replace(/[&<>"]/g, (c) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c] ?? c)) + "</p>"
+    body_text: extracted.bodyText,
+    body_html: extracted.bodyHtml
   };
 }
 
