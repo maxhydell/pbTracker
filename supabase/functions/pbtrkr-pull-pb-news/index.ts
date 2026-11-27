@@ -46,12 +46,12 @@ function stripMarkup(value: string): string {
 
 function extractArticleBody(html: string, description: string): { bodyText: string; bodyHtml: string } {
  const regions: string[] = [];
- regions.push(...(html.match(/<article\\b[^>]*>[\\s\\S]*?<\\/article>/gi) ?? []));
- regions.push(...(html.match(/<main\\b[^>]*>[\\s\\S]*?<\\/main>/gi) ?? []));
+ regions.push(...(html.match(/<article\b[^>]*>[\s\S]*?<\/article>/gi) ?? []));
+ regions.push(...(html.match(/<main\b[^>]*>[\s\S]*?<\/main>/gi) ?? []));
  regions.push(html);
  let bestText=description;
  let bestHtml="<p>"+description+"</p>";
- for(const region of regions){const blocks:string[]=[];const re=/<p\\b[^>]*>([\\s\\S]*?)<\\/p>/gi;let m:RegExpExecArray|null;while((m=re.exec(region))!==null){const t=stripMarkup(m[1]);if(t.length>=35&&!blocks.includes(t))blocks.push(t);}const candidate=blocks.join("\\n\\n");if(candidate.length>bestText.length+80){bestText=candidate;bestHtml=blocks.map(t=>"<p>"+t.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")+"</p>").join("\\n");}}
+ for(const region of regions){const blocks:string[]=[];const re=/<p\b[^>]*>([\s\S]*?)<\/p>/gi;let m:RegExpExecArray|null;while((m=re.exec(region))!==null){const t=stripMarkup(m[1]);if(t.length>=35&&!blocks.includes(t))blocks.push(t);}const candidate=blocks.join("\n\n");if(candidate.length>bestText.length+80){bestText=candidate;bestHtml=blocks.map(t=>"<p>"+t.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")+"</p>").join("\n");}}
  return {bodyText:bestText,bodyHtml:bestHtml};
 }
 function attributes(tag: string): Record<string,string> {
