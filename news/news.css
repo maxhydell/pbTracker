@@ -47,3 +47,5 @@
 .article-source-link{display:inline-flex;margin-top:30px;padding:11px 15px;border:1px solid rgba(96,165,250,.28);border-radius:9px;background:rgba(59,130,246,.1);color:#91c4ff;font-size:12px;font-weight:700;text-decoration:none}
 .article-source-link:hover{background:rgba(59,130,246,.18)}
 @media(max-width:640px){.article-page-main{margin-top:24px}.article-page{padding:26px 20px 34px}.article-page-deck{font-size:14px}.article-page-body{font-size:14px}}
+
+.author-avatar-initials{display:inline-grid;place-items:center;background:linear-gradient(145deg,#7db7ff,#3478d8);color:#071629;font-size:9px;font-weight:800}
