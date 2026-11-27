@@ -208,3 +208,12 @@ h1 span { color: var(--blue-bright); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
+.people-manage-button { width: 100%; margin-top: 13px; cursor: pointer; }
+.people-panel { width: min(620px, 100%); }
+.people-list { display: grid; gap: 7px; max-height: 62vh; overflow: auto; margin: 22px 0 0; padding: 0 4px 0 0; list-style: none; }
+.people-list li { display: flex; align-items: center; justify-content: space-between; gap: 14px; min-height: 48px; padding: 7px 9px 7px 13px; border: 1px solid var(--line); border-radius: 9px; background: rgba(8,15,27,.42); color: #dce7f5; font-size: 12px; }
+.people-delete-button { display: grid; flex: 0 0 auto; place-items: center; width: 33px; height: 33px; padding: 7px; border: 1px solid rgba(239,100,109,.33); border-radius: 8px; background: rgba(239,100,109,.09); color: #ef646d; cursor: pointer; }
+.people-delete-button svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.people-delete-button:hover:not(:disabled) { border-color: rgba(255,116,124,.72); background: rgba(239,100,109,.2); color: #ff828a; }
+.people-delete-button:disabled { cursor: wait; opacity: .55; }
+.people-empty, .people-loading { display: flex; align-items: center; justify-content: center; gap: 10px; min-height: 90px; color: var(--muted); font-size: 12px; }

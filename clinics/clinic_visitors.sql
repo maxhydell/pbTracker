@@ -28,7 +28,25 @@ create index if not exists visitors_clinic_event_id_time_idx
 
 alter table public.visitors enable row level security;
 
--- Public event views may append telemetry, but reads require a trusted admin role.
+-- Rebuild the permissive visitor policy set; the safe INSERT and admin-only
+-- SELECT policies are created below. No visitor rows are changed.
+do $$
+declare
+  existing_policy record;
+begin
+  for existing_policy in
+    select policyname
+    from pg_policies
+    where schemaname = 'public'
+      and tablename = 'visitors'
+      and permissive = 'PERMISSIVE'
+  loop
+    execute format('drop policy if exists %I on public.visitors', existing_policy.policyname);
+  end loop;
+end;
+$$;
+
+-- Public event views may append telemetry, but cannot read, update, or delete visitor rows.
 -- clinic_event_id NULL preserves the existing main-app visitor insert shape.
 drop policy if exists "PBTRKR visitor tracking inserts" on public.visitors;
 create policy "PBTRKR visitor tracking inserts"
@@ -51,14 +69,17 @@ create policy "PBTRKR visitor reads require clinic admin"
   as restrictive
   for select
   to public
-  using ((select auth.jwt() -> 'app_metadata' ->> 'role') in ('clinic_admin', 'pbtrkr_admin'));
+  using (lower(btrim(coalesce((select auth.jwt() -> 'app_metadata' ->> 'role'), ''))) in ('clinic_admin', 'pbtrkr_admin'));
 
 drop policy if exists "Clinic admins can read visitor analytics" on public.visitors;
 create policy "Clinic admins can read visitor analytics"
   on public.visitors
   for select
   to authenticated
-  using ((select auth.jwt() -> 'app_metadata' ->> 'role') in ('clinic_admin', 'pbtrkr_admin'));
+  using (lower(btrim(coalesce((select auth.jwt() -> 'app_metadata' ->> 'role'), ''))) in ('clinic_admin', 'pbtrkr_admin'));
 
+revoke insert on public.visitors from public;
 grant insert on public.visitors to anon, authenticated;
 grant select on public.visitors to authenticated;
+revoke select on public.visitors from public, anon;
+revoke update, delete on public.visitors from public, anon, authenticated;

@@ -12,6 +12,10 @@
   const accountEmail = document.getElementById("account-email");
   const accountRole = document.getElementById("account-role");
   const accountSignOut = document.getElementById("account-sign-out");
+  const peopleButton = document.getElementById("people-button");
+  const peopleModal = document.getElementById("people-modal");
+  const peopleContent = document.getElementById("people-content");
+  const peopleClose = document.getElementById("people-close");
   const createEventButton = document.getElementById("create-event-button");
   const analyticsModal = document.getElementById("visitor-analytics-modal");
   const analyticsContent = document.getElementById("analytics-content");
@@ -24,7 +28,7 @@
   let toastTimeout;
 
   const supabaseClient = window.supabase?.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-  const isAdminRole = role => window.PBTRKRAuthorization?.isAdminRole(role) === true;
+  const isAdminUser = user => window.PBTRKRAuthorization?.isAdminUser(user) === true;
 
   function escapeHtml(value) {
     return String(value ?? "").replace(/[&<>"']/g, (character) => ({
@@ -86,7 +90,7 @@
     const address = event.address || "";
     const availability = event.is_full ? "Full" : "Registration open";
     const availabilityClass = event.is_full ? "status-full" : "status-open";
-    const canViewVisitors = isAdminRole(currentSession?.user?.app_metadata?.role);
+    const canViewVisitors = isAdminUser(currentSession?.user);
 
     return `
       <article class="event-card" data-event-id="${escapeHtml(event.id)}">
@@ -203,10 +207,12 @@
     accountButton.classList.toggle("button-secondary", true);
     accountButton.setAttribute("aria-expanded", "false");
     if (accountEmail) accountEmail.textContent = user?.email || "Account";
-    if (accountRole) accountRole.textContent = isAdminRole(user?.app_metadata?.role) ? "Clinic Administrator" : "Account";
+    if (accountRole) accountRole.textContent = isAdminUser(user) ? "Clinic Administrator" : "Account";
+    if (peopleButton) peopleButton.classList.toggle("is-hidden", !isAdminUser(user));
     closeAccountPopover();
     if (Array.isArray(loadedEvents)) renderLoadedEvents();
-    if (!user || !isAdminRole(user.app_metadata?.role)) closeAnalyticsModal();
+    if (peopleModal?.classList.contains("is-hidden") === false && !isAdminUser(user)) closePeopleModal();
+    if (!user || !isAdminUser(user)) closeAnalyticsModal();
   }
 
   function renderLoadedEvents() {
@@ -229,6 +235,70 @@
     const willOpen = accountPopover.classList.contains("is-hidden");
     accountPopover.classList.toggle("is-hidden", !willOpen);
     accountButton.setAttribute("aria-expanded", String(willOpen));
+  }
+
+  async function loadPeople() {
+    peopleContent.innerHTML = '<div class="people-loading"><span class="spinner" aria-hidden="true"></span>Loading people…</div>';
+    const { data, error } = await supabaseClient
+      .from("clinic_people")
+      .select("id,name,is_active")
+      .eq("is_active", true)
+      .order("name", { ascending: true });
+    if (error) throw error;
+    const people = data || [];
+    peopleContent.innerHTML = people.length ? `<ul class="people-list">${people.map((person) => `<li><span>${escapeHtml(person.name)}</span><button class="people-delete-button" type="button" data-remove-person="${escapeHtml(person.id)}" data-person-name="${escapeHtml(person.name)}" aria-label="Remove ${escapeHtml(person.name)}" title="Remove from clinic roster"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3m3 0-.8 13H6.8L6 7m4 4v5m4-5v5"/></svg></button></li>`).join("")}</ul>` : '<p class="people-empty">No people are available.</p>';
+  }
+
+  async function openPeopleModal() {
+    if (!supabaseClient || !isAdminUser(currentSession?.user)) {
+      showToast("People management is available to clinic administrators only.");
+      return;
+    }
+    peopleModal.classList.remove("is-hidden");
+    document.body.classList.add("analytics-open");
+    peopleClose.focus();
+    try {
+      const { data, error } = await supabaseClient.auth.getSession();
+      if (error) throw error;
+      if (!isAdminUser(data?.session?.user)) throw new Error("Only clinic administrators can manage the roster.");
+      await loadPeople();
+    } catch (error) {
+      peopleContent.innerHTML = `<div class="analytics-error"><strong>People could not be loaded.</strong><span>${escapeHtml(error?.message || "Please try again.")}</span></div>`;
+    }
+  }
+
+  async function removePerson(button) {
+    if (!supabaseClient || !isAdminUser(currentSession?.user)) return;
+    const personName = button.dataset.personName || "this person";
+    if (!window.confirm(`Remove ${personName} from the clinic roster? Past clinic pages will show a replacement name.`)) return;
+    button.disabled = true;
+    try {
+      const { data: sessionData, error: sessionError } = await supabaseClient.auth.getSession();
+      if (sessionError) throw sessionError;
+      if (!isAdminUser(sessionData?.session?.user)) throw new Error("Only clinic administrators can manage the roster.");
+      const { data, error } = await supabaseClient
+        .from("clinic_people")
+        .update({ is_active: false, updated_at: new Date().toISOString() })
+        .eq("id", button.dataset.removePerson)
+        .eq("is_active", true)
+        .select("id")
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) throw new Error("This person is no longer active in the roster.");
+      await loadPeople();
+      showToast("Person removed. Past clinic rosters now use the updated list.");
+    } catch (error) {
+      console.error("Could not remove clinic roster person:", error);
+      showToast(error?.message || "Could not remove this person.");
+      button.disabled = false;
+    }
+  }
+
+  function closePeopleModal() {
+    if (!peopleModal) return;
+    peopleModal.classList.add("is-hidden");
+    document.body.classList.remove("analytics-open");
+    peopleContent.innerHTML = "";
   }
 
   async function handleCreateEventClick(event) {
@@ -280,6 +350,16 @@
       if (event.key === "Escape") closeAccountPopover();
     });
     createEventButton.addEventListener("click", handleCreateEventClick);
+    peopleButton?.addEventListener("click", openPeopleModal);
+    peopleClose?.addEventListener("click", closePeopleModal);
+    peopleModal?.addEventListener("click", (event) => {
+      if (event.target === peopleModal) closePeopleModal();
+      const removeButton = event.target.closest("[data-remove-person]");
+      if (removeButton) removePerson(removeButton);
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") closePeopleModal();
+    });
     supabaseClient.auth.getSession()
       .then(({ data, error }) => {
         if (error) throw error;
@@ -290,7 +370,6 @@
   } else {
     createEventButton.addEventListener("click", handleCreateEventClick);
   }
-
   eventList.addEventListener("click", (event) => {
     const button = event.target.closest("[data-copy-url]");
     if (button) copyEventUrl(button);
@@ -315,7 +394,7 @@
         window.location.assign("/clinic/?p=auth");
         return;
       }
-      if (!isAdminRole(user.app_metadata?.role)) {
+      if (!isAdminUser(user)) {
         showToast("Only clinic administrators can delete events.");
         return;
       }
@@ -501,7 +580,7 @@
   }
 
   async function openVisitorAnalytics(button) {
-    if (!supabaseClient || !isAdminRole(currentSession?.user?.app_metadata?.role)) {
+    if (!supabaseClient || !isAdminUser(currentSession?.user)) {
       showToast("Visitor analytics are available to clinic administrators only.");
       return;
     }
@@ -517,7 +596,7 @@
     try {
       const { data: sessionData, error: sessionError } = await supabaseClient.auth.getSession();
       if (sessionError) throw sessionError;
-      if (!isAdminRole(sessionData?.session?.user?.app_metadata?.role)) {
+      if (!isAdminUser(sessionData?.session?.user)) {
         closeAnalyticsModal();
         showToast("Visitor analytics are available to clinic administrators only.");
         return;
@@ -528,11 +607,11 @@
         .eq("clinic_event_id", eventId)
         .order("time", { ascending: false });
       if (error) throw error;
-      if (requestId !== analyticsRequestId || analyticsModal.classList.contains("is-hidden") || !isAdminRole(currentSession?.user?.app_metadata?.role)) return;
+      if (requestId !== analyticsRequestId || analyticsModal.classList.contains("is-hidden") || !isAdminUser(currentSession?.user)) return;
       renderVisitorAnalytics(eventName, data || []);
     } catch (error) {
       console.error("Could not load clinic visitor analytics:", error);
-      if (requestId !== analyticsRequestId || analyticsModal.classList.contains("is-hidden") || !isAdminRole(currentSession?.user?.app_metadata?.role)) return;
+      if (requestId !== analyticsRequestId || analyticsModal.classList.contains("is-hidden") || !isAdminUser(currentSession?.user)) return;
       analyticsContent.innerHTML = `<div class="analytics-error"><strong>Analytics could not be loaded.</strong><span>${escapeHtml(error?.message || "Please check the visitor analytics migration and try again.")}</span></div>`;
     }
   }

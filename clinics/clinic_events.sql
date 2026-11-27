@@ -48,6 +48,7 @@ create trigger clinic_events_set_updated_at
 alter table public.clinic_events enable row level security;
 
 drop policy if exists "Anyone can read published clinic events" on public.clinic_events;
+drop policy if exists "Public can view published clinic events" on public.clinic_events;
 create policy "Anyone can read published clinic events"
   on public.clinic_events
   for select
@@ -59,29 +60,29 @@ create policy "Clinic admins can read all clinic events"
   on public.clinic_events
   for select
   to authenticated
-  using ((select auth.jwt() -> 'app_metadata' ->> 'role') in ('clinic_admin', 'pbtrkr_admin'));
+  using (lower(btrim(coalesce((select auth.jwt() -> 'app_metadata' ->> 'role'), ''))) in ('clinic_admin', 'pbtrkr_admin'));
 
 drop policy if exists "Clinic admins can create clinic events" on public.clinic_events;
 create policy "Clinic admins can create clinic events"
   on public.clinic_events
   for insert
   to authenticated
-  with check ((select auth.jwt() -> 'app_metadata' ->> 'role') in ('clinic_admin', 'pbtrkr_admin'));
+  with check (lower(btrim(coalesce((select auth.jwt() -> 'app_metadata' ->> 'role'), ''))) in ('clinic_admin', 'pbtrkr_admin'));
 
 drop policy if exists "Clinic admins can update clinic events" on public.clinic_events;
 create policy "Clinic admins can update clinic events"
   on public.clinic_events
   for update
   to authenticated
-  using ((select auth.jwt() -> 'app_metadata' ->> 'role') in ('clinic_admin', 'pbtrkr_admin'))
-  with check ((select auth.jwt() -> 'app_metadata' ->> 'role') in ('clinic_admin', 'pbtrkr_admin'));
+  using (lower(btrim(coalesce((select auth.jwt() -> 'app_metadata' ->> 'role'), ''))) in ('clinic_admin', 'pbtrkr_admin'))
+  with check (lower(btrim(coalesce((select auth.jwt() -> 'app_metadata' ->> 'role'), ''))) in ('clinic_admin', 'pbtrkr_admin'));
 
 drop policy if exists "Clinic admins can delete clinic events" on public.clinic_events;
 create policy "Clinic admins can delete clinic events"
   on public.clinic_events
   for delete
   to authenticated
-  using ((select auth.jwt() -> 'app_metadata' ->> 'role') in ('clinic_admin', 'pbtrkr_admin'));
+  using (lower(btrim(coalesce((select auth.jwt() -> 'app_metadata' ->> 'role'), ''))) in ('clinic_admin', 'pbtrkr_admin'));
 
 grant select on public.clinic_events to anon, authenticated;
 grant insert, update on public.clinic_events to authenticated;
